@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "hessra-identity-token",
+    "hessra-cap-token"
+]
+
+resolver = "3"
+
+[workspace.dependencies]
+biscuit-auth = { version = "6.0", features = ["pem"] }
