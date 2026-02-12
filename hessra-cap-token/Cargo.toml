@@ -1,6 +1,26 @@
 [package]
 name = "hessra-cap-token"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+license = "Apache-2.0"
+authors = ["Jake Valentic <jake@hessra.net>"]
+description = "Capability token implementation for Hessra"
+repository = "https://github.com/Hessra-Labs/hessra-tokens"
+documentation = "https://docs.rs/hessra-cap-token"
+keywords = ["hessra", "authorization", "biscuit", "token", "capability"]
+categories = ["authentication", "api-bindings"]
 
 [dependencies]
+hessra-token-core = { path = "../hessra-token-core", version = "1.0.0" }
+biscuit-auth = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+tracing = "0.1"
+
+[dev-dependencies]
+rand_core = "0.9"
+hex = { workspace = true }

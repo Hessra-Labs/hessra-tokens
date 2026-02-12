@@ -1,25 +1,20 @@
 [package]
-name = "hessra-identity-token"
+name = "hessra-token-core"
 version = "1.0.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Jake Valentic <jake@hessra.net>"]
-description = "Identity token implementation for Hessra"
+description = "Core utilities and types for Hessra token SDKs"
 repository = "https://github.com/Hessra-Labs/hessra-tokens"
-documentation = "https://docs.rs/hessra-identity-token"
-keywords = ["hessra", "authentication", "rust", "biscuit", "identity"]
+documentation = "https://docs.rs/hessra-token-core"
+keywords = ["hessra", "authorization", "token", "core", "biscuit"]
 categories = ["authentication", "api-bindings"]
 
 [dependencies]
-hessra-token-core = { path = "../hessra-token-core", version = "1.0.0" }
 biscuit-auth = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
-tracing = "0.1"
-
-[dev-dependencies]
-rand_core = "0.9"
+regex = { workspace = true }
