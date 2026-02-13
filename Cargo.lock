@@ -430,6 +430,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hessra-context-token"
+version = "1.0.0"
+dependencies = [
+ "biscuit-auth",
+ "chrono",
+ "hessra-token-core",
+ "hex",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "hessra-identity-token"
 version = "1.0.0"
 dependencies = [

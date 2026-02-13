@@ -1,0 +1,21 @@
+[package]
+name = "hessra-context-token"
+version = "1.0.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["Jake Valentic <jake@hessra.net>"]
+description = "Context token implementation for Hessra - information flow control via taint tracking"
+repository = "https://github.com/Hessra-Labs/hessra-tokens"
+documentation = "https://docs.rs/hessra-context-token"
+keywords = ["hessra", "authorization", "biscuit", "token", "context"]
+categories = ["authentication", "api-bindings"]
+
+[dependencies]
+hessra-token-core = { path = "../hessra-token-core", version = "1.0.0" }
+biscuit-auth = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = "0.1"
+
+[dev-dependencies]
+hex = { workspace = true }

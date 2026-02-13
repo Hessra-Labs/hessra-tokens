@@ -3,6 +3,7 @@ members = [
     "hessra-token-core",
     "hessra-identity-token",
     "hessra-cap-token",
+    "hessra-context-token",
 ]
 
 resolver = "3"
