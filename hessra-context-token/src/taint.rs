@@ -125,8 +125,7 @@ pub fn fork_context(
     let parent_labels = extract_taint_labels(parent_token, parent_public_key)?;
 
     // Create a fresh context for the child
-    let child_token =
-        crate::mint::HessraContext::new(child_subject, time_config).issue(keypair)?;
+    let child_token = crate::mint::HessraContext::new(child_subject, time_config).issue(keypair)?;
 
     // If parent has no taint, just return the fresh child context
     if parent_labels.is_empty() {
@@ -170,8 +169,7 @@ mod tests {
         )
         .expect("Failed to add taint");
 
-        let labels =
-            extract_taint_labels(&tainted, public_key).expect("Failed to extract labels");
+        let labels = extract_taint_labels(&tainted, public_key).expect("Failed to extract labels");
         assert_eq!(labels, vec!["PII:SSN".to_string()]);
     }
 
@@ -207,8 +205,7 @@ mod tests {
         )
         .expect("Failed to add taint");
 
-        let labels =
-            extract_taint_labels(&tainted, public_key).expect("Failed to extract labels");
+        let labels = extract_taint_labels(&tainted, public_key).expect("Failed to extract labels");
         assert_eq!(labels.len(), 2);
         assert!(labels.contains(&"PII:email".to_string()));
         assert!(labels.contains(&"PII:address".to_string()));

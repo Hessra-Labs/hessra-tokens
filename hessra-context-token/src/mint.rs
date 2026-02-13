@@ -111,7 +111,10 @@ mod tests {
             .expect("Failed to create expired context token");
 
         let result = ContextVerifier::new(token, public_key).verify();
-        assert!(result.is_err(), "Expired context token should fail verification");
+        assert!(
+            result.is_err(),
+            "Expired context token should fail verification"
+        );
     }
 
     #[test]

@@ -119,10 +119,7 @@ mod tests {
             .expect("Failed to create context token");
 
         let result = ContextVerifier::new(token, wrong_public_key).verify();
-        assert!(
-            result.is_err(),
-            "Token verified with wrong key should fail"
-        );
+        assert!(result.is_err(), "Token verified with wrong key should fail");
     }
 
     #[test]
