@@ -14,8 +14,8 @@ pub struct InspectResult {
     pub is_expired: bool,
     /// Whether this is a delegated token (has attenuation blocks)
     pub is_delegated: bool,
-    /// Domain restriction (if present)
-    pub domain: Option<String>,
+    /// Namespace restriction (if present)
+    pub namespace: Option<String>,
 }
 
 /// Inspects an identity token to extract the subject/actor information without requiring verification.
@@ -60,7 +60,7 @@ pub fn inspect_identity_token(
 
     let token_content = biscuit.print();
     let expiry = extract_expiry_from_content(&token_content);
-    let domain = extract_domain_from_content(&token_content);
+    let namespace = extract_namespace_from_content(&token_content);
 
     let is_expired = expiry.is_some_and(|exp| exp < now);
 
@@ -69,7 +69,7 @@ pub fn inspect_identity_token(
         expiry,
         is_expired,
         is_delegated,
-        domain,
+        namespace,
     })
 }
 
@@ -135,19 +135,19 @@ fn extract_expiry_from_content(content: &str) -> Option<i64> {
     earliest_expiry
 }
 
-/// Extracts domain restriction from token content
-fn extract_domain_from_content(content: &str) -> Option<String> {
+/// Extracts namespace restriction from token content
+fn extract_namespace_from_content(content: &str) -> Option<String> {
     for line in content.lines() {
-        if line.contains("check if") && line.contains("domain(") {
-            if let Some(start_pos) = line.find("domain(") {
-                let after_domain = &line[start_pos + 7..];
+        if line.contains("check if") && line.contains("namespace(") {
+            if let Some(start_pos) = line.find("namespace(") {
+                let after_namespace = &line[start_pos + 10..];
 
-                if let Some(end_pos) = after_domain.find(')') {
-                    let domain_str = &after_domain[..end_pos].trim();
-                    let domain = domain_str.trim_matches('"').trim_matches('\'');
+                if let Some(end_pos) = after_namespace.find(')') {
+                    let namespace_str = &after_namespace[..end_pos].trim();
+                    let namespace = namespace_str.trim_matches('"').trim_matches('\'');
 
-                    if !domain.is_empty() {
-                        return Some(domain.to_string());
+                    if !namespace.is_empty() {
+                        return Some(namespace.to_string());
                     }
                 }
             }
@@ -308,27 +308,27 @@ mod tests {
     }
 
     #[test]
-    fn test_inspect_domain_restricted_token() {
+    fn test_inspect_namespace_restricted_token() {
         let keypair = KeyPair::new();
         let public_key = keypair.public();
         let subject = "urn:hessra:alice".to_string();
-        let domain = "example.com".to_string();
+        let namespace = "example.com".to_string();
 
         let token = HessraIdentity::new(subject.clone(), TokenTimeConfig::default())
-            .domain_restricted(domain.clone())
+            .namespace_restricted(namespace.clone())
             .issue(&keypair)
-            .expect("Failed to create domain-restricted token");
+            .expect("Failed to create namespace-restricted token");
 
         let result = inspect_identity_token(token, public_key)
-            .expect("Failed to inspect domain-restricted token");
+            .expect("Failed to inspect namespace-restricted token");
 
         assert_eq!(result.identity, subject);
-        assert_eq!(result.domain, Some(domain.clone()));
+        assert_eq!(result.namespace, Some(namespace.clone()));
         assert!(!result.is_delegated);
     }
 
     #[test]
-    fn test_inspect_non_domain_restricted_token() {
+    fn test_inspect_non_namespace_restricted_token() {
         let keypair = KeyPair::new();
         let public_key = keypair.public();
         let subject = "urn:hessra:alice".to_string();
@@ -340,27 +340,27 @@ mod tests {
         let result = inspect_identity_token(token, public_key).expect("Failed to inspect token");
 
         assert_eq!(result.identity, subject);
-        assert_eq!(result.domain, None);
+        assert_eq!(result.namespace, None);
     }
 
     #[test]
-    fn test_inspect_delegatable_domain_restricted_token() {
+    fn test_inspect_delegatable_namespace_restricted_token() {
         let keypair = KeyPair::new();
         let public_key = keypair.public();
         let base_identity = "urn:hessra:org".to_string();
-        let domain = "myapp.hessra.dev".to_string();
+        let namespace = "myapp.hessra.dev".to_string();
 
         let token = HessraIdentity::new(base_identity.clone(), TokenTimeConfig::default())
             .delegatable(true)
-            .domain_restricted(domain.clone())
+            .namespace_restricted(namespace.clone())
             .issue(&keypair)
             .expect("Failed to create token");
 
         let result = inspect_identity_token(token, public_key)
-            .expect("Failed to inspect delegatable domain-restricted token");
+            .expect("Failed to inspect delegatable namespace-restricted token");
 
         assert_eq!(result.identity, base_identity);
-        assert_eq!(result.domain, Some(domain));
+        assert_eq!(result.namespace, Some(namespace));
         assert!(!result.is_delegated);
     }
 }

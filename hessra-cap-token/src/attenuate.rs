@@ -1,75 +1,109 @@
 extern crate biscuit_auth as biscuit;
 
 use biscuit::macros::block;
-use hessra_token_core::{Biscuit, KeyPair, PublicKey, TokenError, utils};
+use hessra_token_core::{Biscuit, PublicKey, TokenError, utils};
 
-/// Add a prefix restriction to a token
+/// Builder for adding designation blocks to capability tokens.
 ///
-/// This function adds a third-party block to a token that attenuates
-/// the token to restrict it to the specified prefix. A prefix might
-/// be a URI prefix or file path prefix.
+/// Designations are standard Biscuit attenuation blocks that narrow the scope
+/// of a capability token by specifying which specific object/resource instance
+/// the token applies to. Unlike prefix restrictions (which required third-party
+/// blocks), designations use regular append-only blocks and do not require a
+/// signing key.
 ///
-/// # Arguments
+/// # Example
+/// ```rust,no_run
+/// use hessra_cap_token::DesignationBuilder;
+/// use hessra_token_core::PublicKey;
 ///
-/// * `token` - The binary token data
-/// * `public_key` - The public key to verify the token
-/// * `prefix` - The prefix identifier (e.g. "tenant/TENANTID/user/USERID/")
-/// * `prefix_key` - The key pair of the prefix
-///
-/// # Returns
-///
-/// The attenuated token binary data
-pub fn add_prefix_restriction(
+/// # fn example(token: String, public_key: PublicKey) -> Result<(), Box<dyn std::error::Error>> {
+/// let attenuated = DesignationBuilder::from_base64(token, public_key)?
+///     .designate("tenant_id".to_string(), "t-123".to_string())
+///     .designate("user_id".to_string(), "u-456".to_string())
+///     .attenuate_base64()?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct DesignationBuilder {
     token: Vec<u8>,
     public_key: PublicKey,
-    prefix: String,
-    prefix_key: KeyPair,
-) -> Result<Vec<u8>, TokenError> {
-    let biscuit = Biscuit::from(&token, public_key)?;
-
-    let third_party_request = biscuit.third_party_request()?;
-
-    let third_party_block = block!(
-        r#"
-            check if prefix({prefix});
-            prefix_added(true);
-        "#
-    );
-
-    let third_party_block =
-        third_party_request.create_block(&prefix_key.private(), third_party_block)?;
-
-    let attested_biscuit = biscuit.append_third_party(prefix_key.public(), third_party_block)?;
-
-    let attested_token = attested_biscuit.to_vec()?;
-
-    Ok(attested_token)
+    designations: Vec<(String, String)>,
 }
 
-/// Add a prefix restriction to a base64-encoded token string
-///
-/// This function is a convenience wrapper around `add_prefix_restriction` that
-/// works with base64-encoded token strings instead of binary token data.
-///
-/// # Arguments
-///
-/// * `token` - The base64-encoded token string
-/// * `public_key` - The public key to verify the token
-/// * `prefix` - The prefix identifier (e.g. "tenant/TENANTID/user/USERID/")
-/// * `prefix_key` - The key pair of the prefix
-///
-/// # Returns
-///
-/// * `Ok(String)` - The attested token as a base64-encoded string if successful
-/// * `Err(TokenError)` - If token decoding, attestation, or encoding fails
-pub fn add_prefix_restriction_to_token(
-    token: String,
-    public_key: PublicKey,
-    prefix: String,
-    prefix_key: KeyPair,
-) -> Result<String, TokenError> {
-    let biscuit = utils::decode_token(&token)?;
-    let biscuit = add_prefix_restriction(biscuit, public_key, prefix, prefix_key)?;
-    let attested_token = utils::encode_token(&biscuit);
-    Ok(attested_token)
+impl DesignationBuilder {
+    /// Create a new DesignationBuilder from raw token bytes.
+    ///
+    /// # Arguments
+    /// * `token` - The binary token data
+    /// * `public_key` - The public key to verify the token
+    pub fn new(token: Vec<u8>, public_key: PublicKey) -> Self {
+        Self {
+            token,
+            public_key,
+            designations: Vec::new(),
+        }
+    }
+
+    /// Create a new DesignationBuilder from a base64-encoded token string.
+    ///
+    /// # Arguments
+    /// * `token` - The base64-encoded token string
+    /// * `public_key` - The public key to verify the token
+    pub fn from_base64(token: String, public_key: PublicKey) -> Result<Self, TokenError> {
+        let token_bytes = utils::decode_token(&token)?;
+        Ok(Self::new(token_bytes, public_key))
+    }
+
+    /// Add a designation (label, value) pair to narrow the token's scope.
+    ///
+    /// Each designation adds a `check if designation(label, value)` to the token,
+    /// requiring the verifier to provide matching `designation(label, value)` facts.
+    ///
+    /// # Arguments
+    /// * `label` - The designation dimension (e.g., "tenant_id", "user_id", "region")
+    /// * `value` - The specific value for this dimension (e.g., "t-123", "u-456", "us-east-1")
+    pub fn designate(mut self, label: String, value: String) -> Self {
+        self.designations.push((label, value));
+        self
+    }
+
+    /// Attenuate the token with all accumulated designations.
+    ///
+    /// Returns the attenuated token as binary bytes.
+    pub fn attenuate(self) -> Result<Vec<u8>, TokenError> {
+        let biscuit = Biscuit::from(&self.token, self.public_key)?;
+
+        let mut block_builder = block!(r#""#);
+
+        for (label, value) in &self.designations {
+            let label = label.clone();
+            let value = value.clone();
+            block_builder = block_builder
+                .check(biscuit::macros::check!(
+                    r#"check if designation({label}, {value});"#
+                ))
+                .map_err(|e| TokenError::AttenuationFailed {
+                    reason: format!("Failed to add designation check: {e}"),
+                })?;
+        }
+
+        let attenuated =
+            biscuit
+                .append(block_builder)
+                .map_err(|e| TokenError::AttenuationFailed {
+                    reason: format!("Failed to append designation block: {e}"),
+                })?;
+
+        attenuated
+            .to_vec()
+            .map_err(|e| TokenError::AttenuationFailed {
+                reason: format!("Failed to serialize attenuated token: {e}"),
+            })
+    }
+
+    /// Attenuate the token and return as a base64-encoded string.
+    pub fn attenuate_base64(self) -> Result<String, TokenError> {
+        let bytes = self.attenuate()?;
+        Ok(utils::encode_token(&bytes))
+    }
 }

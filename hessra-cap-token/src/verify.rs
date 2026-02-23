@@ -54,8 +54,8 @@ pub struct CapabilityVerifier {
     resource: String,
     operation: String,
     subject: Option<String>,
-    domain: Option<String>,
-    prefix: Option<String>,
+    namespace: Option<String>,
+    designations: Vec<(String, String)>,
 }
 
 impl CapabilityVerifier {
@@ -73,8 +73,8 @@ impl CapabilityVerifier {
             resource,
             operation,
             subject: None,
-            domain: None,
-            prefix: None,
+            namespace: None,
+            designations: Vec::new(),
         }
     }
 
@@ -90,21 +90,25 @@ impl CapabilityVerifier {
         self
     }
 
-    /// Adds a domain restriction to the verification.
+    /// Adds a namespace restriction to the verification.
     ///
     /// # Arguments
-    /// * `domain` - The domain to verify against (e.g., "example.com")
-    pub fn with_domain(mut self, domain: String) -> Self {
-        self.domain = Some(domain);
+    /// * `namespace` - The namespace to verify against (e.g., "example.com")
+    pub fn with_namespace(mut self, namespace: String) -> Self {
+        self.namespace = Some(namespace);
         self
     }
 
-    /// Adds a prefix restriction to the verification.
+    /// Adds a designation fact to the verification.
+    ///
+    /// Each designation provides a `designation(label, value)` fact that the
+    /// token's designation checks will verify against.
     ///
     /// # Arguments
-    /// * `prefix` - The prefix to verify against
-    pub fn with_prefix(mut self, prefix: String) -> Self {
-        self.prefix = Some(prefix);
+    /// * `label` - The designation dimension (e.g., "tenant_id")
+    /// * `value` - The specific value (e.g., "t-123")
+    pub fn with_designation(mut self, label: String, value: String) -> Self {
+        self.designations.push((label, value));
         self
     }
 
@@ -139,14 +143,16 @@ impl CapabilityVerifier {
             ))?;
         }
 
-        // Add domain fact if specified
-        if let Some(domain) = self.domain.clone() {
-            authz = authz.fact(fact!(r#"domain({domain});"#))?;
+        // Add namespace fact if specified
+        if let Some(namespace) = self.namespace.clone() {
+            authz = authz.fact(fact!(r#"namespace({namespace});"#))?;
         }
 
-        // Add prefix fact if specified
-        if let Some(prefix) = self.prefix.clone() {
-            authz = authz.fact(fact!(r#"prefix({prefix});"#))?;
+        // Add designation facts
+        for (label, value) in &self.designations {
+            let label = label.clone();
+            let value = value.clone();
+            authz = authz.fact(fact!(r#"designation({label}, {value});"#))?;
         }
 
         match authz.build(&biscuit)?.authorize() {
@@ -156,7 +162,7 @@ impl CapabilityVerifier {
                 self.subject.as_deref(),
                 Some(&self.resource),
                 Some(&self.operation),
-                &self.domain,
+                &self.namespace,
             )),
         }
     }
@@ -219,7 +225,7 @@ fn convert_capability_error(
     subject: Option<&str>,
     resource: Option<&str>,
     operation: Option<&str>,
-    domain: &Option<String>,
+    namespace: &Option<String>,
 ) -> TokenError {
     use biscuit::error::{Logic, Token};
 
@@ -241,15 +247,15 @@ fn convert_capability_error(
                     let parsed_error = parse_check_failure(block_id, check_id, &rule);
 
                     match parsed_error {
-                        TokenError::DomainMismatch {
+                        TokenError::NamespaceMismatch {
                             expected,
                             block_id,
                             check_id,
                             ..
                         } => {
-                            return TokenError::DomainMismatch {
+                            return TokenError::NamespaceMismatch {
                                 expected,
-                                provided: domain.clone(),
+                                provided: namespace.clone(),
                                 block_id,
                                 check_id,
                             };

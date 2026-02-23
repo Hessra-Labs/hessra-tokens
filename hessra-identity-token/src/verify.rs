@@ -8,8 +8,8 @@ pub struct IdentityVerifier {
     token: String,
     public_key: PublicKey,
     identity: Option<String>,
-    domain: Option<String>,
-    ensure_subject_in_domain: bool,
+    namespace: Option<String>,
+    ensure_subject_in_namespace: bool,
 }
 
 impl IdentityVerifier {
@@ -19,8 +19,8 @@ impl IdentityVerifier {
             token,
             public_key,
             identity: None,
-            domain: None,
-            ensure_subject_in_domain: false,
+            namespace: None,
+            ensure_subject_in_namespace: false,
         }
     }
 
@@ -30,15 +30,15 @@ impl IdentityVerifier {
         self
     }
 
-    /// Adds a domain restriction to the verification.
-    pub fn with_domain(mut self, domain: String) -> Self {
-        self.domain = Some(domain);
+    /// Adds a namespace restriction to the verification.
+    pub fn with_namespace(mut self, namespace: String) -> Self {
+        self.namespace = Some(namespace);
         self
     }
 
-    /// Ensures that the subject is associated with the domain.
-    pub fn ensure_subject_in_domain(mut self) -> Self {
-        self.ensure_subject_in_domain = true;
+    /// Ensures that the subject is associated with the namespace.
+    pub fn ensure_subject_in_namespace(mut self) -> Self {
+        self.ensure_subject_in_namespace = true;
         self
     }
 
@@ -48,7 +48,7 @@ impl IdentityVerifier {
         let now = Utc::now().timestamp();
 
         let expected_identity = self.identity.clone();
-        let expected_domain = self.domain.clone();
+        let expected_namespace = self.namespace.clone();
 
         let mut authz = if let Some(identity) = self.identity {
             authorizer!(
@@ -66,14 +66,14 @@ impl IdentityVerifier {
             )
         };
 
-        if let Some(domain) = self.domain {
-            authz = authz.fact(fact!(r#"domain({domain});"#))?;
+        if let Some(namespace) = self.namespace {
+            authz = authz.fact(fact!(r#"namespace({namespace});"#))?;
         }
 
-        if self.ensure_subject_in_domain {
+        if self.ensure_subject_in_namespace {
             authz = authz.policy(policy!(
                 r#"
-                    allow if subject($d, $s), domain($d), subject($s);
+                    allow if subject($d, $s), namespace($d), subject($s);
                 "#
             ))?;
         } else {
@@ -93,7 +93,7 @@ impl IdentityVerifier {
             Err(e) => Err(convert_identity_verification_error(
                 e,
                 expected_identity,
-                expected_domain,
+                expected_namespace,
             )),
         }
     }
@@ -118,7 +118,7 @@ pub fn verify_identity_token(
 fn convert_identity_verification_error(
     err: biscuit::error::Token,
     expected_identity: Option<String>,
-    expected_domain: Option<String>,
+    expected_namespace: Option<String>,
 ) -> TokenError {
     use biscuit::error::{Logic, Token};
 
@@ -140,14 +140,14 @@ fn convert_identity_verification_error(
                     let parsed_error = parse_check_failure(block_id, check_id, &rule);
 
                     let enhanced_error = match &parsed_error {
-                        TokenError::DomainMismatch {
+                        TokenError::NamespaceMismatch {
                             expected,
                             block_id,
                             check_id,
                             ..
-                        } => TokenError::DomainMismatch {
+                        } => TokenError::NamespaceMismatch {
                             expected: expected.clone(),
-                            provided: expected_domain.clone(),
+                            provided: expected_namespace.clone(),
                             block_id: *block_id,
                             check_id: *check_id,
                         },

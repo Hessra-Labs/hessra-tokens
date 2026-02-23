@@ -7,8 +7,6 @@ use hessra_token_core::{Biscuit, KeyPair, TokenTimeConfig};
 use std::error::Error;
 use tracing::info;
 
-use crate::verify::biscuit_key_from_string;
-
 /// Builder for creating Hessra capability tokens with flexible configuration.
 ///
 /// Capability tokens grant access to a resource+operation. The subject field is retained
@@ -37,8 +35,7 @@ pub struct HessraCapability {
     resource: Option<String>,
     operation: Option<String>,
     time_config: TokenTimeConfig,
-    domain: Option<String>,
-    prefix_attenuator: Option<String>,
+    namespace: Option<String>,
 }
 
 impl HessraCapability {
@@ -60,33 +57,19 @@ impl HessraCapability {
             resource: Some(resource),
             operation: Some(operation),
             time_config,
-            domain: None,
-            prefix_attenuator: None,
+            namespace: None,
         }
     }
 
-    /// Restricts the capability to a specific domain.
+    /// Restricts the capability to a specific namespace.
     ///
-    /// Adds a domain restriction check to the authority block:
-    /// - `check if domain({domain})`
-    ///
-    /// # Arguments
-    /// * `domain` - The domain to restrict to (e.g., "myapp.hessra.dev")
-    pub fn domain_restricted(mut self, domain: String) -> Self {
-        self.domain = Some(domain);
-        self
-    }
-
-    /// Restricts the capability to a specific prefix, provided by
-    /// a specific third party.
-    ///
-    /// Adds a prefix restriction check to the authority block:
-    /// - `check if prefix_added(true) trusting {prefix_attenuator}`
+    /// Adds a namespace restriction check to the authority block:
+    /// - `check if namespace({namespace})`
     ///
     /// # Arguments
-    /// * `prefix_attenuator` - The public key string of the prefix attenuator
-    pub fn prefix_restricted(mut self, prefix_attenuator: String) -> Self {
-        self.prefix_attenuator = Some(prefix_attenuator);
+    /// * `namespace` - The namespace to restrict to (e.g., "myapp.hessra.dev")
+    pub fn namespace_restricted(mut self, namespace: String) -> Self {
+        self.namespace = Some(namespace);
         self
     }
 
@@ -104,7 +87,7 @@ impl HessraCapability {
             .unwrap_or_else(|| Utc::now().timestamp());
         let expiration = start_time + self.time_config.duration;
 
-        let domain = self.domain;
+        let namespace = self.namespace;
 
         let subject = self.subject.ok_or("Token requires subject")?;
         let resource = self.resource.ok_or("Token requires resource")?;
@@ -122,21 +105,11 @@ impl HessraCapability {
             "#
         );
 
-        // Add domain restriction if specified
-        if let Some(domain) = domain {
+        // Add namespace restriction if specified
+        if let Some(namespace) = namespace {
             biscuit_builder = biscuit_builder.check(check!(
                 r#"
-                    check if domain({domain});
-                "#
-            ))?;
-        }
-
-        // Enforce prefix restriction if specified
-        if let Some(prefix_attenuator) = self.prefix_attenuator {
-            let prefix_key = biscuit_key_from_string(prefix_attenuator)?;
-            biscuit_builder = biscuit_builder.check(check!(
-                r#"
-                    check if prefix_added(true) trusting {prefix_key};
+                    check if namespace({namespace});
                 "#
             ))?;
         }
@@ -397,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_restricted_capability() {
+    fn test_namespace_restricted_capability() {
         let keypair = KeyPair::new();
         let public_key = keypair.public();
 
@@ -407,44 +380,96 @@ mod tests {
             "read".to_string(),
             TokenTimeConfig::default(),
         )
-        .domain_restricted("myapp.hessra.dev".to_string())
+        .namespace_restricted("myapp.hessra.dev".to_string())
         .issue(&keypair)
-        .expect("Failed to create domain-restricted token");
+        .expect("Failed to create namespace-restricted token");
 
-        // Should pass with matching domain
+        // Should pass with matching namespace
         let res = CapabilityVerifier::new(
             token.clone(),
             public_key,
             "resource1".to_string(),
             "read".to_string(),
         )
-        .with_domain("myapp.hessra.dev".to_string())
+        .with_namespace("myapp.hessra.dev".to_string())
         .verify();
-        assert!(res.is_ok(), "Should pass with matching domain");
+        assert!(res.is_ok(), "Should pass with matching namespace");
 
-        // Should fail without domain
+        // Should fail without namespace
         let res = verify_token_local(&token, public_key, "resource1", "read");
-        assert!(res.is_err(), "Should fail without domain");
+        assert!(res.is_err(), "Should fail without namespace");
 
-        // Should fail with wrong domain
+        // Should fail with wrong namespace
         let res = CapabilityVerifier::new(
             token.clone(),
             public_key,
             "resource1".to_string(),
             "read".to_string(),
         )
-        .with_domain("wrong.com".to_string())
+        .with_namespace("wrong.com".to_string())
         .verify();
-        assert!(res.is_err(), "Should fail with wrong domain");
+        assert!(res.is_err(), "Should fail with wrong namespace");
     }
 
     #[test]
-    fn test_prefix_restriction() {
+    fn test_designation_attenuation() {
         let keypair = KeyPair::new();
         let public_key = keypair.public();
-        let prefix_key = KeyPair::new();
-        let prefix_public_key = hex::encode(prefix_key.public().to_bytes());
-        let prefix_public_key_str = format!("ed25519/{prefix_public_key}");
+
+        // Mint a basic token
+        let token = HessraCapability::new(
+            "alice".to_string(),
+            "resource1".to_string(),
+            "read".to_string(),
+            TokenTimeConfig::default(),
+        )
+        .issue(&keypair)
+        .expect("Failed to create token");
+
+        // Attenuate with a designation
+        let attenuated = crate::attenuate::DesignationBuilder::from_base64(token, public_key)
+            .expect("Failed to create designation builder")
+            .designate("tenant_id".to_string(), "t-123".to_string())
+            .attenuate_base64()
+            .expect("Failed to attenuate");
+
+        // Verify with matching designation
+        let res = CapabilityVerifier::new(
+            attenuated.clone(),
+            public_key,
+            "resource1".to_string(),
+            "read".to_string(),
+        )
+        .with_designation("tenant_id".to_string(), "t-123".to_string())
+        .verify();
+        assert!(res.is_ok(), "Should pass with matching designation");
+
+        // Verify with wrong designation value
+        let res = CapabilityVerifier::new(
+            attenuated.clone(),
+            public_key,
+            "resource1".to_string(),
+            "read".to_string(),
+        )
+        .with_designation("tenant_id".to_string(), "t-999".to_string())
+        .verify();
+        assert!(res.is_err(), "Should fail with wrong designation value");
+
+        // Verify without designation should fail
+        let res = CapabilityVerifier::new(
+            attenuated.clone(),
+            public_key,
+            "resource1".to_string(),
+            "read".to_string(),
+        )
+        .verify();
+        assert!(res.is_err(), "Should fail without designation");
+    }
+
+    #[test]
+    fn test_multi_designation() {
+        let keypair = KeyPair::new();
+        let public_key = keypair.public();
 
         let token = HessraCapability::new(
             "alice".to_string(),
@@ -452,44 +477,88 @@ mod tests {
             "read".to_string(),
             TokenTimeConfig::default(),
         )
-        .prefix_restricted(prefix_public_key_str)
         .issue(&keypair)
-        .expect("Failed to create prefix-restricted token");
+        .expect("Failed to create token");
 
-        // Without prefix attenuation, verification should fail
-        let res = verify_token_local(&token, public_key, "resource1", "read");
-        assert!(res.is_err(), "Should fail without prefix attenuation");
+        // Attenuate with multiple designations
+        let attenuated = crate::attenuate::DesignationBuilder::from_base64(token, public_key)
+            .expect("Failed to create designation builder")
+            .designate("tenant_id".to_string(), "t-123".to_string())
+            .designate("user_id".to_string(), "u-456".to_string())
+            .attenuate_base64()
+            .expect("Failed to attenuate");
 
-        // Add prefix restriction via attenuate module
-        let attenuated = crate::attenuate::add_prefix_restriction_to_token(
-            token,
-            public_key,
-            "tenant/123/user/456/".to_string(),
-            prefix_key,
-        )
-        .expect("Failed to add prefix restriction");
-
-        // Now verify with matching prefix
+        // Verify with both designations
         let res = CapabilityVerifier::new(
             attenuated.clone(),
             public_key,
             "resource1".to_string(),
             "read".to_string(),
         )
-        .with_prefix("tenant/123/user/456/".to_string())
+        .with_designation("tenant_id".to_string(), "t-123".to_string())
+        .with_designation("user_id".to_string(), "u-456".to_string())
         .verify();
-        assert!(res.is_ok(), "Should pass with matching prefix");
+        assert!(res.is_ok(), "Should pass with both designations");
 
-        // Wrong prefix should fail
+        // Verify with only one designation should fail (missing the other)
         let res = CapabilityVerifier::new(
             attenuated.clone(),
             public_key,
             "resource1".to_string(),
             "read".to_string(),
         )
-        .with_prefix("tenant/999/user/456/".to_string())
+        .with_designation("tenant_id".to_string(), "t-123".to_string())
         .verify();
-        assert!(res.is_err(), "Should fail with wrong prefix");
+        assert!(res.is_err(), "Should fail with missing designation");
+    }
+
+    #[test]
+    fn test_namespace_plus_designation() {
+        let keypair = KeyPair::new();
+        let public_key = keypair.public();
+
+        let token = HessraCapability::new(
+            "alice".to_string(),
+            "resource1".to_string(),
+            "read".to_string(),
+            TokenTimeConfig::default(),
+        )
+        .namespace_restricted("myapp.hessra.dev".to_string())
+        .issue(&keypair)
+        .expect("Failed to create token");
+
+        // Attenuate with designation
+        let attenuated = crate::attenuate::DesignationBuilder::from_base64(token, public_key)
+            .expect("Failed to create designation builder")
+            .designate("tenant_id".to_string(), "t-123".to_string())
+            .attenuate_base64()
+            .expect("Failed to attenuate");
+
+        // Verify with both namespace and designation
+        let res = CapabilityVerifier::new(
+            attenuated.clone(),
+            public_key,
+            "resource1".to_string(),
+            "read".to_string(),
+        )
+        .with_namespace("myapp.hessra.dev".to_string())
+        .with_designation("tenant_id".to_string(), "t-123".to_string())
+        .verify();
+        assert!(
+            res.is_ok(),
+            "Should pass with both namespace and designation"
+        );
+
+        // Should fail without namespace
+        let res = CapabilityVerifier::new(
+            attenuated.clone(),
+            public_key,
+            "resource1".to_string(),
+            "read".to_string(),
+        )
+        .with_designation("tenant_id".to_string(), "t-123".to_string())
+        .verify();
+        assert!(res.is_err(), "Should fail without namespace");
     }
 
     #[test]

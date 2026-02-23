@@ -50,15 +50,15 @@ pub enum TokenError {
         check_id: u32,
     },
 
-    /// Domain restriction check failed
-    #[error("Domain mismatch: expected '{expected}', {}", match provided {
+    /// Namespace restriction check failed
+    #[error("Namespace mismatch: expected '{expected}', {}", match provided {
         Some(p) => format!("got '{p}'"),
-        None => "no domain provided".to_string(),
+        None => "no namespace provided".to_string(),
     })]
-    DomainMismatch {
-        /// Expected domain from token
+    NamespaceMismatch {
+        /// Expected namespace from token
         expected: String,
-        /// Domain provided during verification (if any)
+        /// Namespace provided during verification (if any)
         provided: Option<String>,
         /// Block ID where the check failed
         block_id: u32,
@@ -206,9 +206,9 @@ impl TokenError {
         matches!(self, TokenError::Expired { .. })
     }
 
-    /// Check if this error is due to domain mismatch
-    pub fn is_domain_mismatch(&self) -> bool {
-        matches!(self, TokenError::DomainMismatch { .. })
+    /// Check if this error is due to namespace mismatch
+    pub fn is_namespace_mismatch(&self) -> bool {
+        matches!(self, TokenError::NamespaceMismatch { .. })
     }
 
     /// Check if this error is due to identity mismatch
@@ -243,10 +243,10 @@ impl TokenError {
         }
     }
 
-    /// Get the expected domain if this is a domain mismatch error
-    pub fn get_expected_domain(&self) -> Option<&str> {
+    /// Get the expected namespace if this is a namespace mismatch error
+    pub fn get_expected_namespace(&self) -> Option<&str> {
         match self {
-            TokenError::DomainMismatch { expected, .. } => Some(expected.as_str()),
+            TokenError::NamespaceMismatch { expected, .. } => Some(expected.as_str()),
             _ => None,
         }
     }

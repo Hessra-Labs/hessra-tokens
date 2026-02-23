@@ -9,7 +9,7 @@ pub use attenuate::add_identity_attenuation_to_token;
 pub use inspect::{InspectResult, inspect_identity_token};
 pub use jit::create_short_lived_identity_token;
 pub use mint::{
-    HessraIdentity, create_domain_restricted_identity_token, create_identity_token,
+    HessraIdentity, create_identity_token, create_namespace_restricted_identity_token,
     create_non_delegatable_identity_token,
 };
 pub use revocation::{
@@ -456,144 +456,143 @@ mod tests {
     }
 
     #[test]
-    fn test_domain_restricted_identity_verification() {
+    fn test_namespace_restricted_identity_verification() {
         use verify::IdentityVerifier;
 
         let keypair = KeyPair::new();
         let public_key = keypair.public();
         let subject = "urn:hessra:alice".to_string();
-        let domain = "example.com".to_string();
+        let namespace = "example.com".to_string();
 
-        // Test 1: Non-delegatable domain-restricted token
-        let domain_token = HessraIdentity::new(subject.clone(), TokenTimeConfig::default())
-            .domain_restricted(domain.clone())
+        // Test 1: Non-delegatable namespace-restricted token
+        let ns_token = HessraIdentity::new(subject.clone(), TokenTimeConfig::default())
+            .namespace_restricted(namespace.clone())
             .issue(&keypair)
-            .expect("Failed to create domain-restricted token");
+            .expect("Failed to create namespace-restricted token");
 
-        // Should pass with matching domain using builder
+        // Should pass with matching namespace using builder
         assert!(
-            IdentityVerifier::new(domain_token.clone(), public_key)
+            IdentityVerifier::new(ns_token.clone(), public_key)
                 .with_identity(subject.clone())
-                .with_domain(domain.clone())
+                .with_namespace(namespace.clone())
                 .verify()
                 .is_ok(),
-            "Verification should succeed with matching domain"
+            "Verification should succeed with matching namespace"
         );
 
-        // Should pass with matching domain using builder and ensuring subject in domain
+        // Should pass with matching namespace using builder and ensuring subject in namespace
         assert!(
-            IdentityVerifier::new(domain_token.clone(), public_key)
+            IdentityVerifier::new(ns_token.clone(), public_key)
                 .with_identity(subject.clone())
-                .with_domain(domain.clone())
-                .ensure_subject_in_domain()
+                .with_namespace(namespace.clone())
+                .ensure_subject_in_namespace()
                 .verify()
                 .is_ok(),
-            "Verification should succeed with matching domain"
+            "Verification should succeed with matching namespace"
         );
 
-        // Should fail without domain context
+        // Should fail without namespace context
         assert!(
-            verify_identity_token(domain_token.clone(), public_key, subject.clone()).is_err(),
-            "Verification should fail without domain context"
+            verify_identity_token(ns_token.clone(), public_key, subject.clone()).is_err(),
+            "Verification should fail without namespace context"
         );
 
-        // Should fail with wrong domain
+        // Should fail with wrong namespace
         assert!(
-            IdentityVerifier::new(domain_token.clone(), public_key)
+            IdentityVerifier::new(ns_token.clone(), public_key)
                 .with_identity(subject.clone())
-                .with_domain("wrong.com".to_string())
+                .with_namespace("wrong.com".to_string())
                 .verify()
                 .is_err(),
-            "Verification should fail with wrong domain"
+            "Verification should fail with wrong namespace"
         );
 
-        // Bearer verification should fail (needs domain fact)
+        // Bearer verification should fail (needs namespace fact)
         assert!(
-            verify_bearer_token(domain_token.clone(), public_key).is_err(),
-            "Bearer verification should fail without domain context"
+            verify_bearer_token(ns_token.clone(), public_key).is_err(),
+            "Bearer verification should fail without namespace context"
         );
 
-        // Bearer with domain should pass
+        // Bearer with namespace should pass
         assert!(
-            IdentityVerifier::new(domain_token.clone(), public_key)
-                .with_domain(domain.clone())
+            IdentityVerifier::new(ns_token.clone(), public_key)
+                .with_namespace(namespace.clone())
                 .verify()
                 .is_ok(),
-            "Bearer verification should pass with domain context"
+            "Bearer verification should pass with namespace context"
         );
 
-        // Test 2: Delegatable domain-restricted token
-        let delegatable_domain_token =
-            HessraIdentity::new(subject.clone(), TokenTimeConfig::default())
-                .delegatable(true)
-                .domain_restricted(domain.clone())
-                .issue(&keypair)
-                .expect("Failed to create delegatable domain-restricted token");
+        // Test 2: Delegatable namespace-restricted token
+        let delegatable_ns_token = HessraIdentity::new(subject.clone(), TokenTimeConfig::default())
+            .delegatable(true)
+            .namespace_restricted(namespace.clone())
+            .issue(&keypair)
+            .expect("Failed to create delegatable namespace-restricted token");
 
-        // Should pass with exact identity and domain
+        // Should pass with exact identity and namespace
         assert!(
-            IdentityVerifier::new(delegatable_domain_token.clone(), public_key)
+            IdentityVerifier::new(delegatable_ns_token.clone(), public_key)
                 .with_identity(subject.clone())
-                .with_domain(domain.clone())
-                .ensure_subject_in_domain()
+                .with_namespace(namespace.clone())
+                .ensure_subject_in_namespace()
                 .verify()
                 .is_ok(),
-            "Delegatable token should verify with exact identity and domain"
+            "Delegatable token should verify with exact identity and namespace"
         );
 
-        // Should pass with hierarchical identity and domain
+        // Should pass with hierarchical identity and namespace
         assert!(
-            IdentityVerifier::new(delegatable_domain_token.clone(), public_key)
+            IdentityVerifier::new(delegatable_ns_token.clone(), public_key)
                 .with_identity("urn:hessra:alice:laptop".to_string())
-                .with_domain(domain.clone())
-                .ensure_subject_in_domain()
+                .with_namespace(namespace.clone())
+                .ensure_subject_in_namespace()
                 .verify()
                 .is_ok(),
-            "Delegatable token should verify with hierarchical identity and domain"
+            "Delegatable token should verify with hierarchical identity and namespace"
         );
 
-        // Should fail with hierarchical identity but no domain
+        // Should fail with hierarchical identity but no namespace
         assert!(
             verify_identity_token(
-                delegatable_domain_token.clone(),
+                delegatable_ns_token.clone(),
                 public_key,
                 "urn:hessra:alice:laptop".to_string()
             )
             .is_err(),
-            "Delegatable token should fail without domain context"
+            "Delegatable token should fail without namespace context"
         );
 
-        // Test 3: Non-domain-restricted token with domain context
+        // Test 3: Non-namespace-restricted token with namespace context
         // (extra context shouldn't break verification)
         let regular_token = HessraIdentity::new(subject.clone(), TokenTimeConfig::default())
             .issue(&keypair)
             .expect("Failed to create regular token");
 
-        // Regular token should pass with or without domain context
+        // Regular token should pass with or without namespace context
         assert!(
             verify_identity_token(regular_token.clone(), public_key, subject.clone()).is_ok(),
-            "Regular token should verify without domain context"
+            "Regular token should verify without namespace context"
         );
 
         assert!(
             IdentityVerifier::new(regular_token.clone(), public_key)
                 .with_identity(subject.clone())
-                .with_domain(domain.clone())
+                .with_namespace(namespace.clone())
                 .verify()
                 .is_ok(),
-            "Regular token should verify even with extra domain context"
+            "Regular token should verify even with extra namespace context"
         );
 
-        // Test 4: Ensure subject in domain
-        // This should fail because the subject is not associated with the domain
+        // Test 4: Ensure subject in namespace
+        // This should fail because the subject is not associated with the namespace
         assert!(
             IdentityVerifier::new(regular_token.clone(), public_key)
                 .with_identity(subject.clone())
-                .with_domain(domain.clone())
-                .ensure_subject_in_domain()
+                .with_namespace(namespace.clone())
+                .ensure_subject_in_namespace()
                 .verify()
                 .is_err(),
-            "Regular token should fail to verify with ensure subject in domain"
+            "Regular token should fail to verify with ensure subject in namespace"
         );
     }
 }

@@ -37,7 +37,7 @@ mod mint;
 mod revocation;
 pub(crate) mod verify;
 
-pub use attenuate::{add_prefix_restriction, add_prefix_restriction_to_token};
+pub use attenuate::DesignationBuilder;
 pub use mint::{HessraCapability, create_biscuit, create_token, create_token_with_time};
 pub use revocation::{get_capability_revocation_id, get_capability_revocation_id_from_bytes};
 pub use verify::{CapabilityVerifier, biscuit_key_from_string, verify_token_local};

@@ -9,7 +9,7 @@ use std::error::Error;
 ///
 /// # Terminology
 /// - **Realm identity**: A configured principal inside a Realm (default, non-delegatable)
-/// - **Domain identity**: A realm identity restricted to a specific domain
+/// - **Domain identity**: A realm identity restricted to a specific namespace
 /// - **Delegatable identity**: An identity token that can be attenuated/delegated further
 ///
 /// # Example
@@ -25,10 +25,10 @@ use std::error::Error;
 ///     .issue(&keypair)
 ///     .expect("Failed to create token");
 ///
-/// // Delegatable domain identity
+/// // Delegatable namespace identity
 /// let token = HessraIdentity::new(subject, TokenTimeConfig::default())
 ///     .delegatable(true)
-///     .domain_restricted("myapp.hessra.dev".to_string())
+///     .namespace_restricted("myapp.hessra.dev".to_string())
 ///     .issue(&keypair)
 ///     .expect("Failed to create token");
 /// ```
@@ -36,7 +36,7 @@ pub struct HessraIdentity {
     subject: String,
     time_config: TokenTimeConfig,
     is_delegatable: bool,
-    domain: Option<String>,
+    namespace: Option<String>,
 }
 
 impl HessraIdentity {
@@ -50,7 +50,7 @@ impl HessraIdentity {
             subject,
             time_config,
             is_delegatable: false,
-            domain: None,
+            namespace: None,
         }
     }
 
@@ -70,17 +70,17 @@ impl HessraIdentity {
         self
     }
 
-    /// Restricts the identity to a specific domain.
+    /// Restricts the identity to a specific namespace.
     ///
-    /// Adds a domain restriction check to the authority block:
-    /// - `check if domain({domain})`
+    /// Adds a namespace restriction check to the authority block:
+    /// - `check if namespace({namespace})`
     ///
-    /// This creates a "domain identity" that can only be used within the specified domain.
+    /// This creates a "namespace identity" that can only be used within the specified namespace.
     ///
     /// # Arguments
-    /// * `domain` - The domain to restrict to (e.g., "myapp.hessra.dev")
-    pub fn domain_restricted(mut self, domain: String) -> Self {
-        self.domain = Some(domain);
+    /// * `namespace` - The namespace to restrict to (e.g., "myapp.hessra.dev")
+    pub fn namespace_restricted(mut self, namespace: String) -> Self {
+        self.namespace = Some(namespace);
         self
     }
 
@@ -101,7 +101,7 @@ impl HessraIdentity {
         // Extract self fields for use in macro (macro doesn't support self.field directly)
         let subject = self.subject;
         let is_delegatable = self.is_delegatable;
-        let domain = self.domain;
+        let namespace = self.namespace;
 
         // Build the base biscuit with subject and time checks
         let mut biscuit_builder = if is_delegatable {
@@ -124,18 +124,18 @@ impl HessraIdentity {
             )
         };
 
-        // Add domain restriction if specified
-        if let Some(domain) = domain {
+        // Add namespace restriction if specified
+        if let Some(namespace) = namespace {
             biscuit_builder = biscuit_builder.check(check!(
                 r#"
-                    check if domain({domain});
+                    check if namespace({namespace});
                 "#
             ))?;
-            // This rule creates a fact that the subject is associated with the domain,
-            // so that verifier can be sure that the subject is associated with the domain.
+            // This rule creates a fact that the subject is associated with the namespace,
+            // so that verifier can be sure that the subject is associated with the namespace.
             biscuit_builder = biscuit_builder.rule(rule!(
                 r#"
-                    subject($d, $s) <- domain($d), subject($s);
+                    subject($d, $s) <- namespace($d), subject($s);
                 "#
             ))?;
         }
@@ -167,14 +167,14 @@ pub fn create_non_delegatable_identity_token(
     HessraIdentity::new(subject, time_config).issue(&key)
 }
 
-/// Creates a domain-restricted identity token (non-delegatable).
-pub fn create_domain_restricted_identity_token(
+/// Creates a namespace-restricted identity token (non-delegatable).
+pub fn create_namespace_restricted_identity_token(
     subject: String,
-    domain: String,
+    namespace: String,
     key: KeyPair,
     time_config: TokenTimeConfig,
 ) -> Result<String, Box<dyn Error>> {
     HessraIdentity::new(subject, time_config)
-        .domain_restricted(domain)
+        .namespace_restricted(namespace)
         .issue(&key)
 }
