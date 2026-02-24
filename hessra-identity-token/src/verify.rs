@@ -99,22 +99,6 @@ impl IdentityVerifier {
     }
 }
 
-/// Verifies the token as a bearer token.
-pub fn verify_bearer_token(token: String, public_key: PublicKey) -> Result<(), TokenError> {
-    IdentityVerifier::new(token, public_key).verify()
-}
-
-/// Verifies the token as an identity token.
-pub fn verify_identity_token(
-    token: String,
-    public_key: PublicKey,
-    identity: String,
-) -> Result<(), TokenError> {
-    IdentityVerifier::new(token, public_key)
-        .with_identity(identity)
-        .verify()
-}
-
 fn convert_identity_verification_error(
     err: biscuit::error::Token,
     expected_identity: Option<String>,

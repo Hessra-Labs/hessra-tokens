@@ -50,27 +50,27 @@ pub fn get_capability_revocation_id_from_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mint::create_biscuit;
-    use hessra_token_core::{KeyPair, TokenTimeConfig, encode_token};
+    use crate::mint::HessraCapability;
+    use hessra_token_core::{KeyPair, TokenTimeConfig, decode_token};
 
     #[test]
     fn test_get_capability_revocation_id() {
         let keypair = KeyPair::new();
         let public_key = keypair.public();
 
-        let token_bytes = create_biscuit(
+        let token_b64 = HessraCapability::new(
             "user123".to_string(),
             "resource456".to_string(),
             "read".to_string(),
-            keypair,
             TokenTimeConfig::default(),
         )
+        .issue(&keypair)
         .expect("Failed to create capability token");
 
-        let token_string = encode_token(&token_bytes);
+        let token_bytes = decode_token(&token_b64).expect("Failed to decode token");
 
         // Get revocation ID from string
-        let rev_id = get_capability_revocation_id(token_string.clone(), public_key)
+        let rev_id = get_capability_revocation_id(token_b64.clone(), public_key)
             .expect("Failed to get revocation ID");
 
         assert!(!rev_id.to_hex().is_empty());
@@ -87,33 +87,30 @@ mod tests {
         let keypair = KeyPair::new();
         let public_key = keypair.public();
 
-        let token1 = create_biscuit(
+        let token1 = HessraCapability::new(
             "user123".to_string(),
             "resource456".to_string(),
             "read".to_string(),
-            keypair,
             TokenTimeConfig::default(),
         )
+        .issue(&keypair)
         .expect("Failed to create first token");
 
         let keypair2 = KeyPair::new();
         let public_key2 = keypair2.public();
-        let token2 = create_biscuit(
+        let token2 = HessraCapability::new(
             "user123".to_string(),
             "resource456".to_string(),
             "read".to_string(),
-            keypair2,
             TokenTimeConfig::default(),
         )
+        .issue(&keypair2)
         .expect("Failed to create second token");
 
-        let token1_string = encode_token(&token1);
-        let token2_string = encode_token(&token2);
-
-        let rev_id1 = get_capability_revocation_id(token1_string, public_key)
+        let rev_id1 = get_capability_revocation_id(token1, public_key)
             .expect("Failed to get first revocation ID");
 
-        let rev_id2 = get_capability_revocation_id(token2_string, public_key2)
+        let rev_id2 = get_capability_revocation_id(token2, public_key2)
             .expect("Failed to get second revocation ID");
 
         assert_ne!(rev_id1.to_hex(), rev_id2.to_hex());
@@ -129,18 +126,16 @@ mod tests {
             duration: 30,
         };
 
-        let token = create_biscuit(
+        let token = HessraCapability::new(
             "user123".to_string(),
             "resource456".to_string(),
             "write".to_string(),
-            keypair,
             short_config,
         )
+        .issue(&keypair)
         .expect("Failed to create short-lived token");
 
-        let token_string = encode_token(&token);
-
-        let rev_id = get_capability_revocation_id(token_string, public_key)
+        let rev_id = get_capability_revocation_id(token, public_key)
             .expect("Failed to get revocation ID for short-lived token");
 
         assert!(!rev_id.to_hex().is_empty());

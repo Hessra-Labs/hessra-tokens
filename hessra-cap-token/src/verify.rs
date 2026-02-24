@@ -14,18 +14,19 @@ use hessra_token_core::{
 ///
 /// # Example
 /// ```no_run
-/// use hessra_cap_token::{CapabilityVerifier, create_token};
-/// use hessra_token_core::KeyPair;
+/// use hessra_cap_token::{CapabilityVerifier, HessraCapability};
+/// use hessra_token_core::{KeyPair, TokenTimeConfig};
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let keypair = KeyPair::new();
 /// let public_key = keypair.public();
-/// let token = create_token(
+/// let token = HessraCapability::new(
 ///     "user123".to_string(),
 ///     "resource456".to_string(),
 ///     "read".to_string(),
-///     keypair,
-/// )?;
+///     TokenTimeConfig::default(),
+/// )
+/// .issue(&keypair)?;
 ///
 /// // Basic capability verification (no subject check)
 /// CapabilityVerifier::new(
@@ -166,29 +167,6 @@ impl CapabilityVerifier {
             )),
         }
     }
-}
-
-/// Verifies a capability token locally (4 args: no subject required).
-///
-/// # Arguments
-///
-/// * `token` - The base64-encoded Biscuit token string
-/// * `public_key` - The public key used to verify the token signature
-/// * `resource` - The resource identifier to verify
-/// * `operation` - The operation to verify
-pub fn verify_token_local(
-    token: &str,
-    public_key: PublicKey,
-    resource: &str,
-    operation: &str,
-) -> Result<(), TokenError> {
-    CapabilityVerifier::new(
-        token.to_string(),
-        public_key,
-        resource.to_string(),
-        operation.to_string(),
-    )
-    .verify()
 }
 
 /// Takes a public key encoded as a string in the format "ed25519/..." or "secp256r1/..."

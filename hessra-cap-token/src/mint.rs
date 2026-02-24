@@ -1,9 +1,8 @@
 extern crate biscuit_auth as biscuit;
 
-use biscuit::BiscuitBuilder;
 use biscuit::macros::{biscuit, check};
 use chrono::Utc;
-use hessra_token_core::{Biscuit, KeyPair, TokenTimeConfig};
+use hessra_token_core::{KeyPair, TokenTimeConfig};
 use std::error::Error;
 use tracing::info;
 
@@ -122,130 +121,30 @@ impl HessraCapability {
     }
 }
 
-/// Creates a base biscuit builder with custom time configuration.
-fn create_base_biscuit_builder_with_time(
-    subject: String,
-    resource: String,
-    operation: String,
-    time_config: TokenTimeConfig,
-) -> Result<BiscuitBuilder, Box<dyn Error>> {
-    let start_time = time_config
-        .start_time
-        .unwrap_or_else(|| Utc::now().timestamp());
-    let expiration = start_time + time_config.duration;
-
-    let biscuit_builder = biscuit!(
-        r#"
-            right({subject}, {resource}, {operation});
-            check if resource($res), operation($op), right($sub, $res, $op);
-            check if time($time), $time < {expiration};
-        "#
-    );
-
-    Ok(biscuit_builder)
-}
-
-/// Creates a biscuit (not serialized, not base64 encoded) with custom time configuration.
-pub fn create_raw_biscuit(
-    subject: String,
-    resource: String,
-    operation: String,
-    key: KeyPair,
-    time_config: TokenTimeConfig,
-) -> Result<Biscuit, Box<dyn Error>> {
-    let biscuit = create_base_biscuit_builder_with_time(subject, resource, operation, time_config)?
-        .build(&key)?;
-
-    info!("biscuit (authority): {}", biscuit);
-
-    Ok(biscuit)
-}
-
-/// Creates a new biscuit token as binary bytes.
-///
-/// # Arguments
-///
-/// * `subject` - The subject (user) identifier (for auditing)
-/// * `resource` - The resource identifier to grant access to
-/// * `operation` - The operation to grant access to
-/// * `key` - The key pair used to sign the token
-/// * `time_config` - Time configuration for token validity
-pub fn create_biscuit(
-    subject: String,
-    resource: String,
-    operation: String,
-    key: KeyPair,
-    time_config: TokenTimeConfig,
-) -> Result<Vec<u8>, Box<dyn Error>> {
-    let biscuit = create_raw_biscuit(subject, resource, operation, key, time_config)?;
-    let token = biscuit.to_vec()?;
-    Ok(token)
-}
-
-/// Creates a base64-encoded biscuit token with custom time configuration.
-fn create_base64_biscuit(
-    subject: String,
-    resource: String,
-    operation: String,
-    key: KeyPair,
-    time_config: TokenTimeConfig,
-) -> Result<String, Box<dyn Error>> {
-    let biscuit = create_raw_biscuit(subject, resource, operation, key, time_config)?;
-    let token = biscuit.to_base64()?;
-    Ok(token)
-}
-
-/// Creates a base64-encoded capability token with default time configuration (5 minutes).
-pub fn create_token(
-    subject: String,
-    resource: String,
-    operation: String,
-    key: KeyPair,
-) -> Result<String, Box<dyn Error>> {
-    create_base64_biscuit(
-        subject,
-        resource,
-        operation,
-        key,
-        TokenTimeConfig::default(),
-    )
-}
-
-/// Creates a base64-encoded capability token with custom time configuration.
-pub fn create_token_with_time(
-    subject: String,
-    resource: String,
-    operation: String,
-    key: KeyPair,
-    time_config: TokenTimeConfig,
-) -> Result<String, Box<dyn Error>> {
-    create_base64_biscuit(subject, resource, operation, key, time_config)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::verify::{CapabilityVerifier, verify_token_local};
+    use crate::verify::CapabilityVerifier;
     use chrono::Utc;
 
     #[test]
-    fn test_create_biscuit() {
+    fn test_create_and_verify_capability() {
         let subject = "test@test.com".to_owned();
-        let resource: String = "res1".to_string();
+        let resource = "res1".to_string();
         let operation = "read".to_string();
         let root = KeyPair::new();
         let public_key = root.public();
-        let token = create_biscuit(
+
+        let token = HessraCapability::new(
             subject.clone(),
             resource.clone(),
             operation.clone(),
-            root,
             TokenTimeConfig::default(),
         )
-        .unwrap();
+        .issue(&root)
+        .expect("Failed to create token");
 
-        let token_string = hessra_token_core::encode_token(&token);
-        let res = verify_token_local(&token_string, public_key, &resource, &operation);
+        let res = CapabilityVerifier::new(token, public_key, resource, operation).verify();
         assert!(res.is_ok());
     }
 
@@ -257,11 +156,17 @@ mod tests {
         let root = KeyPair::new();
         let public_key = root.public();
 
-        let token =
-            create_token(subject.clone(), resource.clone(), operation.clone(), root).unwrap();
+        let token = HessraCapability::new(
+            subject.clone(),
+            resource.clone(),
+            operation.clone(),
+            TokenTimeConfig::default(),
+        )
+        .issue(&root)
+        .expect("Failed to create token");
 
         // Verify without subject -- the core capability change
-        let res = verify_token_local(&token, public_key, &resource, &operation);
+        let res = CapabilityVerifier::new(token, public_key, resource, operation).verify();
         assert!(
             res.is_ok(),
             "Capability verification without subject should succeed"
@@ -276,8 +181,14 @@ mod tests {
         let root = KeyPair::new();
         let public_key = root.public();
 
-        let token =
-            create_token(subject.clone(), resource.clone(), operation.clone(), root).unwrap();
+        let token = HessraCapability::new(
+            subject.clone(),
+            resource.clone(),
+            operation.clone(),
+            TokenTimeConfig::default(),
+        )
+        .issue(&root)
+        .expect("Failed to create token");
 
         // Verify with optional subject check
         let res = CapabilityVerifier::new(
@@ -309,15 +220,19 @@ mod tests {
     fn test_wrong_resource_rejected() {
         let root = KeyPair::new();
         let public_key = root.public();
-        let token = create_token(
+
+        let token = HessraCapability::new(
             "alice".to_string(),
             "res1".to_string(),
             "read".to_string(),
-            root,
+            TokenTimeConfig::default(),
         )
-        .unwrap();
+        .issue(&root)
+        .expect("Failed to create token");
 
-        let res = verify_token_local(&token, public_key, "res2", "read");
+        let res =
+            CapabilityVerifier::new(token, public_key, "res2".to_string(), "read".to_string())
+                .verify();
         assert!(res.is_err(), "Wrong resource should be rejected");
     }
 
@@ -325,15 +240,19 @@ mod tests {
     fn test_wrong_operation_rejected() {
         let root = KeyPair::new();
         let public_key = root.public();
-        let token = create_token(
+
+        let token = HessraCapability::new(
             "alice".to_string(),
             "res1".to_string(),
             "read".to_string(),
-            root,
+            TokenTimeConfig::default(),
         )
-        .unwrap();
+        .issue(&root)
+        .expect("Failed to create token");
 
-        let res = verify_token_local(&token, public_key, "res1", "write");
+        let res =
+            CapabilityVerifier::new(token, public_key, "res1".to_string(), "write".to_string())
+                .verify();
         assert!(res.is_err(), "Wrong operation should be rejected");
     }
 
@@ -346,26 +265,35 @@ mod tests {
         let public_key = root.public();
 
         // Create a valid token
-        let token =
-            create_token(subject.clone(), resource.clone(), operation.clone(), root).unwrap();
-        let res = verify_token_local(&token, public_key, &resource, &operation);
+        let token = HessraCapability::new(
+            subject.clone(),
+            resource.clone(),
+            operation.clone(),
+            TokenTimeConfig::default(),
+        )
+        .issue(&root)
+        .expect("Failed to create token");
+
+        let res = CapabilityVerifier::new(token, public_key, resource.clone(), operation.clone())
+            .verify();
         assert!(res.is_ok());
 
         // Create an expired token
         let root = KeyPair::new();
         let public_key = root.public();
-        let token = create_token_with_time(
+        let token = HessraCapability::new(
             subject.clone(),
             resource.clone(),
             operation.clone(),
-            root,
             TokenTimeConfig {
                 start_time: Some(Utc::now().timestamp() - 301),
                 duration: 300,
             },
         )
-        .unwrap();
-        let res = verify_token_local(&token, public_key, &resource, &operation);
+        .issue(&root)
+        .expect("Failed to create expired token");
+
+        let res = CapabilityVerifier::new(token, public_key, resource, operation).verify();
         assert!(res.is_err(), "Expired token should be rejected");
     }
 
@@ -396,7 +324,13 @@ mod tests {
         assert!(res.is_ok(), "Should pass with matching namespace");
 
         // Should fail without namespace
-        let res = verify_token_local(&token, public_key, "resource1", "read");
+        let res = CapabilityVerifier::new(
+            token.clone(),
+            public_key,
+            "resource1".to_string(),
+            "read".to_string(),
+        )
+        .verify();
         assert!(res.is_err(), "Should fail without namespace");
 
         // Should fail with wrong namespace
@@ -575,7 +509,13 @@ mod tests {
         .issue(&keypair)
         .expect("Failed to create token");
 
-        let res = verify_token_local(&token, public_key, "resource1", "read");
+        let res = CapabilityVerifier::new(
+            token,
+            public_key,
+            "resource1".to_string(),
+            "read".to_string(),
+        )
+        .verify();
         assert!(res.is_ok());
     }
 
@@ -591,16 +531,18 @@ mod tests {
             duration: 7200,
         };
 
-        let token = create_token_with_time(
+        let token = HessraCapability::new(
             "alice".to_string(),
             "res1".to_string(),
             "read".to_string(),
-            root,
             time_config,
         )
-        .unwrap();
+        .issue(&root)
+        .expect("Failed to create token");
 
-        let res = verify_token_local(&token, public_key, "res1", "read");
+        let res =
+            CapabilityVerifier::new(token, public_key, "res1".to_string(), "read".to_string())
+                .verify();
         assert!(res.is_ok());
     }
 }

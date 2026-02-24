@@ -146,35 +146,3 @@ impl HessraIdentity {
         Ok(token)
     }
 }
-
-/// Creates a basic realm identity token (delegatable).
-pub fn create_identity_token(
-    subject: String,
-    key: KeyPair,
-    time_config: TokenTimeConfig,
-) -> Result<String, Box<dyn Error>> {
-    HessraIdentity::new(subject, time_config)
-        .delegatable(true)
-        .issue(&key)
-}
-
-/// Creates a basic realm identity token (non-delegatable).
-pub fn create_non_delegatable_identity_token(
-    subject: String,
-    key: KeyPair,
-    time_config: TokenTimeConfig,
-) -> Result<String, Box<dyn Error>> {
-    HessraIdentity::new(subject, time_config).issue(&key)
-}
-
-/// Creates a namespace-restricted identity token (non-delegatable).
-pub fn create_namespace_restricted_identity_token(
-    subject: String,
-    namespace: String,
-    key: KeyPair,
-    time_config: TokenTimeConfig,
-) -> Result<String, Box<dyn Error>> {
-    HessraIdentity::new(subject, time_config)
-        .namespace_restricted(namespace)
-        .issue(&key)
-}

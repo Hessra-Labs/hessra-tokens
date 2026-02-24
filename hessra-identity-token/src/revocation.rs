@@ -143,7 +143,7 @@ fn extract_all_delegated_identities(biscuit: &Biscuit) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HessraIdentity, add_identity_attenuation_to_token, create_identity_token};
+    use crate::{HessraIdentity, add_identity_attenuation_to_token};
     use hessra_token_core::{KeyPair, TokenTimeConfig};
 
     #[test]
@@ -152,7 +152,9 @@ mod tests {
         let public_key = keypair.public();
         let subject = "urn:hessra:alice".to_string();
 
-        let token = create_identity_token(subject.clone(), keypair, TokenTimeConfig::default())
+        let token = HessraIdentity::new(subject.clone(), TokenTimeConfig::default())
+            .delegatable(true)
+            .issue(&keypair)
             .expect("Failed to create token");
 
         let revocations =

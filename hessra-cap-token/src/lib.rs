@@ -38,9 +38,9 @@ mod revocation;
 pub(crate) mod verify;
 
 pub use attenuate::DesignationBuilder;
-pub use mint::{HessraCapability, create_biscuit, create_token, create_token_with_time};
+pub use mint::HessraCapability;
 pub use revocation::{get_capability_revocation_id, get_capability_revocation_id_from_bytes};
-pub use verify::{CapabilityVerifier, biscuit_key_from_string, verify_token_local};
+pub use verify::{CapabilityVerifier, biscuit_key_from_string};
 
 // Re-export commonly needed types from core
 pub use hessra_token_core::{

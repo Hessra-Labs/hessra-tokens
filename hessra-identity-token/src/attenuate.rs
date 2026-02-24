@@ -3,7 +3,7 @@ use biscuit::macros::block;
 use chrono::Utc;
 use hessra_token_core::{Biscuit, KeyPair, PublicKey, TokenError, TokenTimeConfig};
 
-use crate::verify::verify_identity_token;
+use crate::verify::IdentityVerifier;
 
 pub fn add_identity_attenuation_to_token(
     token: String,
@@ -35,10 +35,11 @@ pub fn add_identity_attenuation_to_token(
     let token = attenuated_biscuit.to_base64()?;
 
     // Verifying the token after attenuating it ensures that the token *can* be attenuated.
-    verify_identity_token(token.clone(), public_key, ident).map_err(|e| {
-        TokenError::AttenuationFailed {
+    IdentityVerifier::new(token.clone(), public_key)
+        .with_identity(ident)
+        .verify()
+        .map_err(|e| TokenError::AttenuationFailed {
             reason: format!("Failed to verify attenuated token: {e}"),
-        }
-    })?;
+        })?;
     Ok(token)
 }

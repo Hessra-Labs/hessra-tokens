@@ -34,7 +34,7 @@ pub fn create_short_lived_identity_token(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{create_identity_token, verify_identity_token};
+    use crate::{HessraIdentity, verify::IdentityVerifier};
     use hessra_token_core::{KeyPair, TokenTimeConfig};
     use std::thread;
     use std::time::Duration;
@@ -45,9 +45,10 @@ mod tests {
         let public_key = keypair.public();
         let identity = "urn:hessra:test:user".to_string();
 
-        let base_token =
-            create_identity_token(identity.clone(), keypair, TokenTimeConfig::default())
-                .expect("Failed to create base token");
+        let base_token = HessraIdentity::new(identity.clone(), TokenTimeConfig::default())
+            .delegatable(true)
+            .issue(&keypair)
+            .expect("Failed to create base token");
 
         let short_lived = create_short_lived_identity_token(base_token.clone(), public_key)
             .expect("Failed to create short-lived token");
@@ -55,7 +56,10 @@ mod tests {
         assert_ne!(base_token, short_lived);
 
         assert!(
-            verify_identity_token(short_lived.clone(), public_key, identity.clone()).is_ok(),
+            IdentityVerifier::new(short_lived.clone(), public_key)
+                .with_identity(identity.clone())
+                .verify()
+                .is_ok(),
             "Short-lived token should verify immediately"
         );
     }
@@ -66,15 +70,19 @@ mod tests {
         let public_key = keypair.public();
         let identity = "urn:hessra:test:user".to_string();
 
-        let base_token =
-            create_identity_token(identity.clone(), keypair, TokenTimeConfig::default())
-                .expect("Failed to create base token");
+        let base_token = HessraIdentity::new(identity.clone(), TokenTimeConfig::default())
+            .delegatable(true)
+            .issue(&keypair)
+            .expect("Failed to create base token");
 
         let short_lived = create_short_lived_identity_token(base_token, public_key)
             .expect("Failed to create short-lived token");
 
         assert!(
-            verify_identity_token(short_lived.clone(), public_key, identity.clone()).is_ok(),
+            IdentityVerifier::new(short_lived.clone(), public_key)
+                .with_identity(identity.clone())
+                .verify()
+                .is_ok(),
             "Token should verify immediately after creation"
         );
 
@@ -82,7 +90,10 @@ mod tests {
         thread::sleep(Duration::from_secs(6));
 
         assert!(
-            verify_identity_token(short_lived, public_key, identity).is_err(),
+            IdentityVerifier::new(short_lived, public_key)
+                .with_identity(identity)
+                .verify()
+                .is_err(),
             "Token should fail verification after 5 seconds"
         );
     }
@@ -95,19 +106,27 @@ mod tests {
         let alice = "urn:hessra:alice".to_string();
         let bob = "urn:hessra:bob".to_string();
 
-        let alice_token = create_identity_token(alice.clone(), keypair, TokenTimeConfig::default())
+        let alice_token = HessraIdentity::new(alice.clone(), TokenTimeConfig::default())
+            .delegatable(true)
+            .issue(&keypair)
             .expect("Failed to create alice token");
 
         let short_lived = create_short_lived_identity_token(alice_token, public_key)
             .expect("Failed to create short-lived token");
 
         assert!(
-            verify_identity_token(short_lived.clone(), public_key, alice).is_ok(),
+            IdentityVerifier::new(short_lived.clone(), public_key)
+                .with_identity(alice)
+                .verify()
+                .is_ok(),
             "Should verify with correct identity"
         );
 
         assert!(
-            verify_identity_token(short_lived, public_key, bob).is_err(),
+            IdentityVerifier::new(short_lived, public_key)
+                .with_identity(bob)
+                .verify()
+                .is_err(),
             "Should not verify with different identity"
         );
     }

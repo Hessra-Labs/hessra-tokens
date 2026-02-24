@@ -8,14 +8,11 @@ mod verify;
 pub use attenuate::add_identity_attenuation_to_token;
 pub use inspect::{InspectResult, inspect_identity_token};
 pub use jit::create_short_lived_identity_token;
-pub use mint::{
-    HessraIdentity, create_identity_token, create_namespace_restricted_identity_token,
-    create_non_delegatable_identity_token,
-};
+pub use mint::HessraIdentity;
 pub use revocation::{
     IdentityRevocation, get_active_identity_revocation, get_identity_revocations,
 };
-pub use verify::{IdentityVerifier, verify_bearer_token, verify_identity_token};
+pub use verify::IdentityVerifier;
 
 #[cfg(test)]
 mod tests {
@@ -36,31 +33,37 @@ mod tests {
 
         // Should pass with exact identity
         assert!(
-            verify_identity_token(token.clone(), public_key, subject.clone()).is_ok(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity(subject.clone())
+                .verify()
+                .is_ok(),
             "Verification should succeed with exact identity match"
         );
 
         // Should pass verification as a bearer token
         assert!(
-            verify_bearer_token(token.clone(), public_key).is_ok(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .verify()
+                .is_ok(),
             "Verification should succeed as a bearer token"
         );
 
         // Should fail with different identity
         assert!(
-            verify_identity_token(token.clone(), public_key, "urn:hessra:bob".to_string()).is_err(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity("urn:hessra:bob".to_string())
+                .verify()
+                .is_err(),
             "Verification should fail with different identity"
         );
 
         // Non-delegatable realm identity: hierarchical identities should NOT work
         // because the base token only allows exact match: $a == {subject}
         assert!(
-            verify_identity_token(
-                token.clone(),
-                public_key,
-                "urn:hessra:alice:agent".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity("urn:hessra:alice:agent".to_string())
+                .verify()
+                .is_err(),
             "Hierarchical identity should fail for non-delegatable realm identity"
         );
 
@@ -72,18 +75,19 @@ mod tests {
 
         // Exact identity should work
         assert!(
-            verify_identity_token(delegatable_token.clone(), public_key, subject.clone()).is_ok(),
+            IdentityVerifier::new(delegatable_token.clone(), public_key)
+                .with_identity(subject.clone())
+                .verify()
+                .is_ok(),
             "Exact identity should work with delegatable token"
         );
 
         // Hierarchical identities should work with delegatable tokens
         assert!(
-            verify_identity_token(
-                delegatable_token.clone(),
-                public_key,
-                "urn:hessra:alice:agent".to_string()
-            )
-            .is_ok(),
+            IdentityVerifier::new(delegatable_token.clone(), public_key)
+                .with_identity("urn:hessra:alice:agent".to_string())
+                .verify()
+                .is_ok(),
             "Hierarchical identity should work with delegatable realm identity"
         );
     }
@@ -115,8 +119,9 @@ mod tests {
         };
 
         // Original identity should NOT work with attenuated token (delegation restricts usage)
-        let base_verify_result =
-            verify_identity_token(attenuated_token.clone(), public_key, base_identity.clone());
+        let base_verify_result = IdentityVerifier::new(attenuated_token.clone(), public_key)
+            .with_identity(base_identity.clone())
+            .verify();
         assert!(
             base_verify_result.is_err(),
             "Base identity should NOT verify with attenuated token - use original token instead"
@@ -124,40 +129,36 @@ mod tests {
 
         // Delegated identity should work
         assert!(
-            verify_identity_token(
-                attenuated_token.clone(),
-                public_key,
-                delegated_identity.clone()
-            )
-            .is_ok(),
+            IdentityVerifier::new(attenuated_token.clone(), public_key)
+                .with_identity(delegated_identity.clone())
+                .verify()
+                .is_ok(),
             "Delegated identity should verify"
         );
 
         // Delegated identities don't work as bearer tokens
         assert!(
-            verify_bearer_token(attenuated_token.clone(), public_key).is_err(),
+            IdentityVerifier::new(attenuated_token.clone(), public_key)
+                .verify()
+                .is_err(),
             "Delegated identity should not verify as a bearer token"
         );
 
         // Different branch should fail
         assert!(
-            verify_identity_token(
-                attenuated_token.clone(),
-                public_key,
-                "urn:hessra:alice:phone".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(attenuated_token.clone(), public_key)
+                .with_identity("urn:hessra:alice:phone".to_string())
+                .verify()
+                .is_err(),
             "Different branch of delegation should fail"
         );
 
         // Completely different identity should fail
         assert!(
-            verify_identity_token(
-                attenuated_token.clone(),
-                public_key,
-                "urn:hessra:bob".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(attenuated_token.clone(), public_key)
+                .with_identity("urn:hessra:bob".to_string())
+                .verify()
+                .is_err(),
             "Completely different identity should fail"
         );
     }
@@ -209,48 +210,54 @@ mod tests {
         // After all attenuations, only the most specific identity should work
         // (all checks must pass, so we get the intersection)
         assert!(
-            verify_identity_token(token.clone(), public_key, org_identity).is_err(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity(org_identity)
+                .verify()
+                .is_err(),
             "Organization level should NOT work after delegation to device"
         );
         assert!(
-            verify_identity_token(token.clone(), public_key, dept_identity).is_err(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity(dept_identity)
+                .verify()
+                .is_err(),
             "Department level should NOT work after delegation to device"
         );
         assert!(
-            verify_identity_token(token.clone(), public_key, user_identity).is_err(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity(user_identity)
+                .verify()
+                .is_err(),
             "User level should NOT work after delegation to device"
         );
         assert!(
-            verify_identity_token(token.clone(), public_key, device_identity).is_ok(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity(device_identity)
+                .verify()
+                .is_ok(),
             "Device level SHOULD work - it's the delegated identity"
         );
 
         // Different branches should fail
         assert!(
-            verify_identity_token(
-                token.clone(),
-                public_key,
-                "urn:hessra:company:dept_hr".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity("urn:hessra:company:dept_hr".to_string())
+                .verify()
+                .is_err(),
             "Different department should fail"
         );
         assert!(
-            verify_identity_token(
-                token.clone(),
-                public_key,
-                "urn:hessra:company:dept_eng:bob".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity("urn:hessra:company:dept_eng:bob".to_string())
+                .verify()
+                .is_err(),
             "Different user in same department should fail"
         );
         assert!(
-            verify_identity_token(
-                token.clone(),
-                public_key,
-                "urn:hessra:company:dept_eng:alice:phone".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity("urn:hessra:company:dept_eng:alice:phone".to_string())
+                .verify()
+                .is_err(),
             "Different device for same user should fail"
         );
     }
@@ -273,7 +280,10 @@ mod tests {
 
         // Should fail verification due to expiration
         assert!(
-            verify_identity_token(expired_token, expired_public_key, identity.clone()).is_err(),
+            IdentityVerifier::new(expired_token, expired_public_key)
+                .with_identity(identity.clone())
+                .verify()
+                .is_err(),
             "Expired token should fail verification"
         );
 
@@ -338,11 +348,17 @@ mod tests {
 
             // After attenuation, only the delegated identity should work
             assert!(
-                verify_identity_token(attenuated.clone(), public_key, base.to_string()).is_err(),
+                IdentityVerifier::new(attenuated.clone(), public_key)
+                    .with_identity(base.to_string())
+                    .verify()
+                    .is_err(),
                 "Base identity {base} should NOT verify after delegation"
             );
             assert!(
-                verify_identity_token(attenuated, public_key, delegated.to_string()).is_ok(),
+                IdentityVerifier::new(attenuated, public_key)
+                    .with_identity(delegated.to_string())
+                    .verify()
+                    .is_ok(),
                 "Delegated identity {delegated} should verify"
             );
         }
@@ -362,12 +378,10 @@ mod tests {
 
         // alice2 should not be able to verify (even though "alice" is a prefix of "alice2")
         assert!(
-            verify_identity_token(
-                alice_token.clone(),
-                public_key,
-                "urn:hessra:alice2".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(alice_token.clone(), public_key)
+                .with_identity("urn:hessra:alice2".to_string())
+                .verify()
+                .is_err(),
             "alice2 should not verify against alice token"
         );
 
@@ -382,21 +396,17 @@ mod tests {
 
         // Similar prefix attacks on attenuated token
         assert!(
-            verify_identity_token(
-                attenuated.clone(),
-                public_key,
-                "urn:hessra:alice:device2".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(attenuated.clone(), public_key)
+                .with_identity("urn:hessra:alice:device2".to_string())
+                .verify()
+                .is_err(),
             "device2 should not verify against device"
         );
         assert!(
-            verify_identity_token(
-                attenuated,
-                public_key,
-                "urn:hessra:alice2:device".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(attenuated, public_key)
+                .with_identity("urn:hessra:alice2:device".to_string())
+                .verify()
+                .is_err(),
             "alice2:device should not verify"
         );
     }
@@ -420,19 +430,27 @@ mod tests {
 
         // Verification with empty identity should work
         assert!(
-            verify_identity_token(token.clone(), public_key, "".to_string()).is_ok(),
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity("".to_string())
+                .verify()
+                .is_ok(),
             "Empty identity should verify against empty identity token"
         );
 
         // Non-empty identity should fail (non-delegatable requires exact match)
         assert!(
-            verify_identity_token(token.clone(), public_key, "urn:hessra:anyone".to_string())
+            IdentityVerifier::new(token.clone(), public_key)
+                .with_identity("urn:hessra:anyone".to_string())
+                .verify()
                 .is_err(),
             "Non-empty identity should not verify against non-delegatable empty identity token"
         );
 
         assert!(
-            verify_identity_token(token, public_key, ":something".to_string()).is_err(),
+            IdentityVerifier::new(token, public_key)
+                .with_identity(":something".to_string())
+                .verify()
+                .is_err(),
             "Identity starting with : should not match non-delegatable empty identity"
         );
 
@@ -444,21 +462,25 @@ mod tests {
 
         // Empty identity should work
         assert!(
-            verify_identity_token(delegatable_token.clone(), public_key, "".to_string()).is_ok(),
+            IdentityVerifier::new(delegatable_token.clone(), public_key)
+                .with_identity("".to_string())
+                .verify()
+                .is_ok(),
             "Empty identity should verify against delegatable empty identity token"
         );
 
         // Something starting with ":" would pass due to starts_with check
         assert!(
-            verify_identity_token(delegatable_token, public_key, ":something".to_string()).is_ok(),
+            IdentityVerifier::new(delegatable_token, public_key)
+                .with_identity(":something".to_string())
+                .verify()
+                .is_ok(),
             "Identity starting with : would match delegatable empty identity's hierarchy check"
         );
     }
 
     #[test]
     fn test_namespace_restricted_identity_verification() {
-        use verify::IdentityVerifier;
-
         let keypair = KeyPair::new();
         let public_key = keypair.public();
         let subject = "urn:hessra:alice".to_string();
@@ -493,7 +515,10 @@ mod tests {
 
         // Should fail without namespace context
         assert!(
-            verify_identity_token(ns_token.clone(), public_key, subject.clone()).is_err(),
+            IdentityVerifier::new(ns_token.clone(), public_key)
+                .with_identity(subject.clone())
+                .verify()
+                .is_err(),
             "Verification should fail without namespace context"
         );
 
@@ -509,7 +534,9 @@ mod tests {
 
         // Bearer verification should fail (needs namespace fact)
         assert!(
-            verify_bearer_token(ns_token.clone(), public_key).is_err(),
+            IdentityVerifier::new(ns_token.clone(), public_key)
+                .verify()
+                .is_err(),
             "Bearer verification should fail without namespace context"
         );
 
@@ -553,12 +580,10 @@ mod tests {
 
         // Should fail with hierarchical identity but no namespace
         assert!(
-            verify_identity_token(
-                delegatable_ns_token.clone(),
-                public_key,
-                "urn:hessra:alice:laptop".to_string()
-            )
-            .is_err(),
+            IdentityVerifier::new(delegatable_ns_token.clone(), public_key)
+                .with_identity("urn:hessra:alice:laptop".to_string())
+                .verify()
+                .is_err(),
             "Delegatable token should fail without namespace context"
         );
 
@@ -570,7 +595,10 @@ mod tests {
 
         // Regular token should pass with or without namespace context
         assert!(
-            verify_identity_token(regular_token.clone(), public_key, subject.clone()).is_ok(),
+            IdentityVerifier::new(regular_token.clone(), public_key)
+                .with_identity(subject.clone())
+                .verify()
+                .is_ok(),
             "Regular token should verify without namespace context"
         );
 

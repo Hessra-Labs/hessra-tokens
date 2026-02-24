@@ -160,7 +160,7 @@ fn extract_namespace_from_content(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HessraIdentity, add_identity_attenuation_to_token, create_identity_token};
+    use crate::{HessraIdentity, add_identity_attenuation_to_token};
     use hessra_token_core::{KeyPair, TokenTimeConfig};
 
     #[test]
@@ -220,7 +220,9 @@ mod tests {
             duration: 1,
         };
 
-        let token = create_identity_token(subject.clone(), keypair, expired_config)
+        let token = HessraIdentity::new(subject.clone(), expired_config)
+            .delegatable(true)
+            .issue(&keypair)
             .expect("Failed to create token");
 
         let result =
