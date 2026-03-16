@@ -40,24 +40,23 @@ fn try_parse_expiration(block_id: u32, check_id: u32, rule: &str) -> Option<Toke
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"check if time\(\$\w+\), \$\w+ < (\d+)").unwrap());
 
-    if let Some(captures) = re.captures(rule) {
-        if let Some(timestamp_str) = captures.get(1) {
-            if let Ok(expired_at) = timestamp_str.as_str().parse::<i64>() {
-                // We don't have the current time from the rule, so we'll use a placeholder
-                // The actual current time will be filled in by the verification logic
-                let current_time = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
+    if let Some(captures) = re.captures(rule)
+        && let Some(timestamp_str) = captures.get(1)
+        && let Ok(expired_at) = timestamp_str.as_str().parse::<i64>()
+    {
+        // We don't have the current time from the rule, so we'll use a placeholder
+        // The actual current time will be filled in by the verification logic
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
 
-                return Some(TokenError::Expired {
-                    expired_at,
-                    current_time,
-                    block_id,
-                    check_id,
-                });
-            }
-        }
+        return Some(TokenError::Expired {
+            expired_at,
+            current_time,
+            block_id,
+            check_id,
+        });
     }
 
     None
@@ -69,16 +68,16 @@ fn try_parse_namespace(block_id: u32, check_id: u32, rule: &str) -> Option<Token
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r#"check if namespace\("([^"]+)"\)"#).unwrap());
 
-    if let Some(captures) = re.captures(rule) {
-        if let Some(namespace_match) = captures.get(1) {
-            let expected = namespace_match.as_str().to_string();
-            return Some(TokenError::NamespaceMismatch {
-                expected,
-                provided: None,
-                block_id,
-                check_id,
-            });
-        }
+    if let Some(captures) = re.captures(rule)
+        && let Some(namespace_match) = captures.get(1)
+    {
+        let expected = namespace_match.as_str().to_string();
+        return Some(TokenError::NamespaceMismatch {
+            expected,
+            provided: None,
+            block_id,
+            check_id,
+        });
     }
 
     None
@@ -91,16 +90,16 @@ fn try_parse_identity(_block_id: u32, _check_id: u32, rule: &str) -> Option<Toke
     let re =
         RE.get_or_init(|| Regex::new(r#"check if actor\(\$\w+\), \$\w+ == "([^"]+)""#).unwrap());
 
-    if let Some(captures) = re.captures(rule) {
-        if let Some(identity_match) = captures.get(1) {
-            let expected = identity_match.as_str().to_string();
-            // We don't know the actual identity from the rule alone
-            // This will be filled in by the verification logic
-            return Some(TokenError::IdentityMismatch {
-                expected,
-                actual: "<unknown>".to_string(),
-            });
-        }
+    if let Some(captures) = re.captures(rule)
+        && let Some(identity_match) = captures.get(1)
+    {
+        let expected = identity_match.as_str().to_string();
+        // We don't know the actual identity from the rule alone
+        // This will be filled in by the verification logic
+        return Some(TokenError::IdentityMismatch {
+            expected,
+            actual: "<unknown>".to_string(),
+        });
     }
 
     None
@@ -117,19 +116,19 @@ fn try_parse_hierarchy(block_id: u32, check_id: u32, rule: &str) -> Option<Token
         .unwrap()
     });
 
-    if let Some(captures) = re.captures(rule) {
-        if let Some(base_identity_match) = captures.get(1) {
-            let expected = base_identity_match.as_str().to_string();
-            let delegatable = rule.contains("starts_with");
+    if let Some(captures) = re.captures(rule)
+        && let Some(base_identity_match) = captures.get(1)
+    {
+        let expected = base_identity_match.as_str().to_string();
+        let delegatable = rule.contains("starts_with");
 
-            return Some(TokenError::HierarchyViolation {
-                expected,
-                actual: "<unknown>".to_string(),
-                delegatable,
-                block_id,
-                check_id,
-            });
-        }
+        return Some(TokenError::HierarchyViolation {
+            expected,
+            actual: "<unknown>".to_string(),
+            delegatable,
+            block_id,
+            check_id,
+        });
     }
 
     None

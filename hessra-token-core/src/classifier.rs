@@ -293,12 +293,12 @@ fn classify_blocks(
 /// Classify the type of a specific block based on its content
 fn classify_block_type(block_content: &str) -> BlockType {
     // Check for delegation (delegated_identity fact)
-    if block_content.contains("delegated_identity(") {
-        if let Some(identity) = extract_quoted_value(block_content, "delegated_identity(") {
-            return BlockType::Delegation {
-                delegated_identity: identity,
-            };
-        }
+    if block_content.contains("delegated_identity(")
+        && let Some(identity) = extract_quoted_value(block_content, "delegated_identity(")
+    {
+        return BlockType::Delegation {
+            delegated_identity: identity,
+        };
     }
 
     // Check for time attenuation (time checks)
@@ -356,12 +356,12 @@ fn determine_structure(blocks: &[BlockMetadata]) -> TokenStructure {
 fn extract_quoted_value(line: &str, prefix: &str) -> Option<String> {
     if let Some(start_idx) = line.find(prefix) {
         let after_prefix = &line[start_idx + prefix.len()..];
-        if let Some(first_quote) = after_prefix.find('"') {
-            if let Some(second_quote) = after_prefix[first_quote + 1..].find('"') {
-                return Some(
-                    after_prefix[first_quote + 1..first_quote + 1 + second_quote].to_string(),
-                );
-            }
+        if let Some(first_quote) = after_prefix.find('"')
+            && let Some(second_quote) = after_prefix[first_quote + 1..].find('"')
+        {
+            return Some(
+                after_prefix[first_quote + 1..first_quote + 1 + second_quote].to_string(),
+            );
         }
     }
     None
