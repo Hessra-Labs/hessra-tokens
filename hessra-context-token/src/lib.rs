@@ -1,18 +1,18 @@
 //! # Hessra Context Token
 //!
-//! Context token implementation for information flow control (taint tracking)
+//! Context token implementation for information flow control (exposure tracking)
 //! in the Hessra authorization system.
 //!
 //! Context tokens track what data an object (typically an AI agent) has been
-//! exposed to during a session. Each data access adds taint labels as
+//! exposed to during a session. Each data access adds exposure labels as
 //! append-only Biscuit blocks, which downstream systems use to restrict
 //! available capabilities.
 //!
 //! ## Key Properties
 //!
-//! - **Append-only**: Taint labels accumulate and cannot be removed within a session
-//! - **Cryptographically enforced**: Each taint block is signed, preventing forgery
-//! - **Inheritable**: Child contexts inherit parent taint via `fork_context`
+//! - **Append-only**: Exposure labels accumulate and cannot be removed within a session
+//! - **Cryptographically enforced**: Each exposure block is signed, preventing forgery
+//! - **Inheritable**: Child contexts inherit parent exposure via `fork_context`
 //! - **Stateless verification**: Only a public key is needed to verify
 //!
 //! ## Authority Block
@@ -22,19 +22,19 @@
 //! check if time($time), $time < expiration;
 //! ```
 //!
-//! ## Taint Blocks
+//! ## Exposure Blocks
 //!
-//! Each taint addition appends a block with:
+//! Each exposure addition appends a block with:
 //! ```datalog
-//! taint("PII:SSN");
-//! taint_source("data:user-ssn");
-//! taint_time(1234567890);
+//! exposure("PII:SSN");
+//! exposure_source("data:user-ssn");
+//! exposure_time(1234567890);
 //! ```
 //!
 //! ## Example
 //!
 //! ```rust
-//! use hessra_context_token::{HessraContext, ContextVerifier, add_taint, extract_taint_labels};
+//! use hessra_context_token::{HessraContext, ContextVerifier, add_exposure, extract_exposure_labels};
 //! use hessra_token_core::{KeyPair, TokenTimeConfig};
 //!
 //! let keypair = KeyPair::new();
@@ -45,33 +45,33 @@
 //!     .issue(&keypair)
 //!     .expect("Failed to create context token");
 //!
-//! // Add taint labels
-//! let tainted = add_taint(
+//! // Add exposure labels
+//! let exposed = add_exposure(
 //!     &token,
 //!     public_key,
 //!     &["PII:SSN".to_string()],
 //!     "data:user-ssn".to_string(),
-//! ).expect("Failed to add taint");
+//! ).expect("Failed to add exposure");
 //!
-//! // Extract taint labels
-//! let labels = extract_taint_labels(&tainted, public_key)
-//!     .expect("Failed to extract taint");
+//! // Extract exposure labels (diagnostic only)
+//! let labels = extract_exposure_labels(&exposed, public_key)
+//!     .expect("Failed to extract exposure");
 //! assert_eq!(labels, vec!["PII:SSN".to_string()]);
 //!
 //! // Verify the context token
-//! ContextVerifier::new(tainted, public_key)
+//! ContextVerifier::new(exposed, public_key)
 //!     .verify()
 //!     .expect("Failed to verify context token");
 //! ```
 
+mod exposure;
 mod inspect;
 mod mint;
-mod taint;
 mod verify;
 
+pub use exposure::{add_exposure, extract_exposure_labels, fork_context};
 pub use inspect::{ContextInspectResult, inspect_context_token};
 pub use mint::HessraContext;
-pub use taint::{add_taint, extract_taint_labels, fork_context};
 pub use verify::ContextVerifier;
 
 // Re-export commonly needed types from core

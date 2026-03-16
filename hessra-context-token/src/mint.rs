@@ -7,7 +7,7 @@ use std::error::Error;
 
 /// Builder for creating Hessra context tokens.
 ///
-/// Context tokens identify a session and track data exposure (taint labels)
+/// Context tokens identify a session and track data exposure (exposure labels)
 /// as append-only Biscuit blocks.
 ///
 /// # Example
