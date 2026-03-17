@@ -5,8 +5,8 @@
 //! This is primarily used for audit logging and building token relationship graphs.
 
 use crate::{
+    revocation::{get_revocation_ids, RevocationId},
     Biscuit,
-    revocation::{RevocationId, get_revocation_ids},
 };
 use std::fmt;
 
@@ -359,9 +359,7 @@ fn extract_quoted_value(line: &str, prefix: &str) -> Option<String> {
         if let Some(first_quote) = after_prefix.find('"')
             && let Some(second_quote) = after_prefix[first_quote + 1..].find('"')
         {
-            return Some(
-                after_prefix[first_quote + 1..first_quote + 1 + second_quote].to_string(),
-            );
+            return Some(after_prefix[first_quote + 1..first_quote + 1 + second_quote].to_string());
         }
     }
     None
