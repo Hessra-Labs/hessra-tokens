@@ -91,13 +91,13 @@ pub fn extract_exposure_labels(
         // Parse exposure facts from block source: lines like `exposure("PII:SSN");`
         for line in block_source.lines() {
             let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("exposure(") {
-                if let Some(label_str) = rest.strip_suffix(");") {
-                    // Remove quotes
-                    let label = label_str.trim_matches('"').to_string();
-                    if !labels.contains(&label) {
-                        labels.push(label);
-                    }
+            if let Some(rest) = trimmed.strip_prefix("exposure(")
+                && let Some(label_str) = rest.strip_suffix(");")
+            {
+                // Remove quotes
+                let label = label_str.trim_matches('"').to_string();
+                if !labels.contains(&label) {
+                    labels.push(label);
                 }
             }
         }

@@ -123,14 +123,14 @@ impl ContextVerifier {
             let block_source = biscuit.print_block_source(i).unwrap_or_default();
             for line in block_source.lines() {
                 let trimmed = line.trim();
-                if let Some(rest) = trimmed.strip_prefix("exposure(") {
-                    if let Some(label_str) = rest.strip_suffix(");") {
-                        let label = label_str.trim_matches('"');
-                        if precluded.iter().any(|p| p == label) {
-                            return Err(TokenError::internal(format!(
-                                "precluded exposure label present: {label}"
-                            )));
-                        }
+                if let Some(rest) = trimmed.strip_prefix("exposure(")
+                    && let Some(label_str) = rest.strip_suffix(");")
+                {
+                    let label = label_str.trim_matches('"');
+                    if precluded.iter().any(|p| p == label) {
+                        return Err(TokenError::internal(format!(
+                            "precluded exposure label present: {label}"
+                        )));
                     }
                 }
             }

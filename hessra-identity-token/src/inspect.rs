@@ -107,17 +107,19 @@ fn extract_expiry_from_content(content: &str) -> Option<i64> {
     let mut earliest_expiry: Option<i64> = None;
 
     for line in content.lines() {
-        if line.contains("check if") && line.contains("time") && line.contains("<") {
-            if let Some(pos) = line.find("$time <") {
-                let after_lt = &line[pos + 8..].trim();
-                let number_str = after_lt
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit() || *c == '-')
-                    .collect::<String>();
+        if line.contains("check if")
+            && line.contains("time")
+            && line.contains("<")
+            && let Some(pos) = line.find("$time <")
+        {
+            let after_lt = &line[pos + 8..].trim();
+            let number_str = after_lt
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-')
+                .collect::<String>();
 
-                if let Ok(timestamp) = number_str.parse::<i64>() {
-                    earliest_expiry = Some(earliest_expiry.map_or(timestamp, |e| e.min(timestamp)));
-                }
+            if let Ok(timestamp) = number_str.parse::<i64>() {
+                earliest_expiry = Some(earliest_expiry.map_or(timestamp, |e| e.min(timestamp)));
             }
         }
     }
@@ -128,17 +130,18 @@ fn extract_expiry_from_content(content: &str) -> Option<i64> {
 /// Extracts namespace restriction from token content
 fn extract_namespace_from_content(content: &str) -> Option<String> {
     for line in content.lines() {
-        if line.contains("check if") && line.contains("namespace(") {
-            if let Some(start_pos) = line.find("namespace(") {
-                let after_namespace = &line[start_pos + 10..];
+        if line.contains("check if")
+            && line.contains("namespace(")
+            && let Some(start_pos) = line.find("namespace(")
+        {
+            let after_namespace = &line[start_pos + 10..];
 
-                if let Some(end_pos) = after_namespace.find(')') {
-                    let namespace_str = &after_namespace[..end_pos].trim();
-                    let namespace = namespace_str.trim_matches('"').trim_matches('\'');
+            if let Some(end_pos) = after_namespace.find(')') {
+                let namespace_str = &after_namespace[..end_pos].trim();
+                let namespace = namespace_str.trim_matches('"').trim_matches('\'');
 
-                    if !namespace.is_empty() {
-                        return Some(namespace.to_string());
-                    }
+                if !namespace.is_empty() {
+                    return Some(namespace.to_string());
                 }
             }
         }

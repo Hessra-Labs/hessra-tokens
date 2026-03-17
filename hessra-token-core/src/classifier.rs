@@ -5,8 +5,8 @@
 //! This is primarily used for audit logging and building token relationship graphs.
 
 use crate::{
-    revocation::{get_revocation_ids, RevocationId},
     Biscuit,
+    revocation::{RevocationId, get_revocation_ids},
 };
 use std::fmt;
 

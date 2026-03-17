@@ -87,12 +87,11 @@ fn extract_base_identity(biscuit: &Biscuit) -> Result<String, TokenError> {
     let content = biscuit.print();
 
     for line in content.lines() {
-        if line.trim().starts_with("subject(") {
-            if let Some(start) = line.find('"') {
-                if let Some(end) = line[start + 1..].find('"') {
-                    return Ok(line[start + 1..start + 1 + end].to_string());
-                }
-            }
+        if line.trim().starts_with("subject(")
+            && let Some(start) = line.find('"')
+            && let Some(end) = line[start + 1..].find('"')
+        {
+            return Ok(line[start + 1..start + 1 + end].to_string());
         }
     }
 

@@ -73,21 +73,21 @@ pub fn inspect_context_token(
 
         for line in block_source.lines() {
             let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("exposure(") {
-                if let Some(label_str) = rest.strip_suffix(");") {
-                    let label = label_str.trim_matches('"').to_string();
-                    if !exposure_labels.contains(&label) {
-                        exposure_labels.push(label);
-                    }
-                    block_has_exposure = true;
+            if let Some(rest) = trimmed.strip_prefix("exposure(")
+                && let Some(label_str) = rest.strip_suffix(");")
+            {
+                let label = label_str.trim_matches('"').to_string();
+                if !exposure_labels.contains(&label) {
+                    exposure_labels.push(label);
                 }
+                block_has_exposure = true;
             }
-            if let Some(rest) = trimmed.strip_prefix("exposure_source(") {
-                if let Some(source_str) = rest.strip_suffix(");") {
-                    let source = source_str.trim_matches('"').to_string();
-                    if !exposure_sources.contains(&source) {
-                        exposure_sources.push(source);
-                    }
+            if let Some(rest) = trimmed.strip_prefix("exposure_source(")
+                && let Some(source_str) = rest.strip_suffix(");")
+            {
+                let source = source_str.trim_matches('"').to_string();
+                if !exposure_sources.contains(&source) {
+                    exposure_sources.push(source);
                 }
             }
         }
@@ -117,17 +117,19 @@ fn extract_expiry_from_content(content: &str) -> Option<i64> {
     let mut earliest_expiry: Option<i64> = None;
 
     for line in content.lines() {
-        if line.contains("check if") && line.contains("time") && line.contains("<") {
-            if let Some(pos) = line.find("$time <") {
-                let after_lt = &line[pos + 8..].trim();
-                let number_str = after_lt
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit() || *c == '-')
-                    .collect::<String>();
+        if line.contains("check if")
+            && line.contains("time")
+            && line.contains("<")
+            && let Some(pos) = line.find("$time <")
+        {
+            let after_lt = &line[pos + 8..].trim();
+            let number_str = after_lt
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-')
+                .collect::<String>();
 
-                if let Ok(timestamp) = number_str.parse::<i64>() {
-                    earliest_expiry = Some(earliest_expiry.map_or(timestamp, |e| e.min(timestamp)));
-                }
+            if let Ok(timestamp) = number_str.parse::<i64>() {
+                earliest_expiry = Some(earliest_expiry.map_or(timestamp, |e| e.min(timestamp)));
             }
         }
     }
