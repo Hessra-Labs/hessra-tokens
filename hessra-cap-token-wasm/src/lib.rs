@@ -46,28 +46,6 @@ pub fn verify_capability_with_subject(
     .map_err(to_js_error)
 }
 
-/// Verify a capability token with namespace restriction.
-/// Throws on failure.
-#[wasm_bindgen]
-pub fn verify_capability_with_namespace(
-    token: &str,
-    public_key: &str,
-    resource: &str,
-    operation: &str,
-    namespace: &str,
-) -> Result<(), JsError> {
-    let pk = parse_key(public_key)?;
-    hessra_cap_token::CapabilityVerifier::new(
-        token.to_string(),
-        pk,
-        resource.to_string(),
-        operation.to_string(),
-    )
-    .with_namespace(namespace.to_string())
-    .verify()
-    .map_err(to_js_error)
-}
-
 /// Verify a capability token with designation checks.
 /// `designations` is a JS array of `{ label: string, value: string }` objects.
 /// Throws on failure.
@@ -106,9 +84,8 @@ pub fn verify_designated_capability(
 #[wasm_bindgen]
 pub fn get_revocation_id(token: &str, public_key: &str) -> Result<String, JsError> {
     let pk = parse_key(public_key)?;
-    let rev_id =
-        hessra_cap_token::get_capability_revocation_id(token.to_string(), pk)
-            .map_err(to_js_error)?;
+    let rev_id = hessra_cap_token::get_capability_revocation_id(token.to_string(), pk)
+        .map_err(to_js_error)?;
     Ok(rev_id.to_hex())
 }
 
@@ -139,7 +116,6 @@ pub struct WasmCapabilityVerifier {
     resource: String,
     operation: String,
     subject: Option<String>,
-    namespace: Option<String>,
     designations: Vec<(String, String)>,
 }
 
@@ -159,7 +135,6 @@ impl WasmCapabilityVerifier {
             resource: resource.to_string(),
             operation: operation.to_string(),
             subject: None,
-            namespace: None,
             designations: Vec::new(),
         })
     }
@@ -171,14 +146,9 @@ impl WasmCapabilityVerifier {
     }
 
     #[wasm_bindgen]
-    pub fn with_namespace(mut self, namespace: &str) -> Self {
-        self.namespace = Some(namespace.to_string());
-        self
-    }
-
-    #[wasm_bindgen]
     pub fn with_designation(mut self, label: &str, value: &str) -> Self {
-        self.designations.push((label.to_string(), value.to_string()));
+        self.designations
+            .push((label.to_string(), value.to_string()));
         self
     }
 
@@ -193,9 +163,6 @@ impl WasmCapabilityVerifier {
 
         if let Some(subject) = self.subject {
             verifier = verifier.with_subject(subject);
-        }
-        if let Some(namespace) = self.namespace {
-            verifier = verifier.with_namespace(namespace);
         }
         for (label, value) in self.designations {
             verifier = verifier.with_designation(label, value);
@@ -239,7 +206,11 @@ impl WasmDesignationBuilder {
 
     /// Add a designation (label, value) pair to narrow the token's scope.
     #[wasm_bindgen]
-    pub fn designate(mut self, label: &str, value: &str) -> Result<WasmDesignationBuilder, JsError> {
+    pub fn designate(
+        mut self,
+        label: &str,
+        value: &str,
+    ) -> Result<WasmDesignationBuilder, JsError> {
         let builder = self
             .inner
             .take()

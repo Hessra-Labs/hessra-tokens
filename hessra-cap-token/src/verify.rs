@@ -55,7 +55,6 @@ pub struct CapabilityVerifier {
     resource: String,
     operation: String,
     subject: Option<String>,
-    namespace: Option<String>,
     designations: Vec<(String, String)>,
 }
 
@@ -74,7 +73,6 @@ impl CapabilityVerifier {
             resource,
             operation,
             subject: None,
-            namespace: None,
             designations: Vec::new(),
         }
     }
@@ -88,15 +86,6 @@ impl CapabilityVerifier {
     /// * `subject` - The subject to verify in the token's right fact
     pub fn with_subject(mut self, subject: String) -> Self {
         self.subject = Some(subject);
-        self
-    }
-
-    /// Adds a namespace restriction to the verification.
-    ///
-    /// # Arguments
-    /// * `namespace` - The namespace to verify against (e.g., "example.com")
-    pub fn with_namespace(mut self, namespace: String) -> Self {
-        self.namespace = Some(namespace);
         self
     }
 
@@ -144,11 +133,6 @@ impl CapabilityVerifier {
             ))?;
         }
 
-        // Add namespace fact if specified
-        if let Some(namespace) = self.namespace.clone() {
-            authz = authz.fact(fact!(r#"namespace({namespace});"#))?;
-        }
-
         // Add designation facts
         for (label, value) in &self.designations {
             let label = label.clone();
@@ -163,7 +147,6 @@ impl CapabilityVerifier {
                 self.subject.as_deref(),
                 Some(&self.resource),
                 Some(&self.operation),
-                &self.namespace,
             )),
         }
     }
@@ -203,7 +186,6 @@ fn convert_capability_error(
     subject: Option<&str>,
     resource: Option<&str>,
     operation: Option<&str>,
-    namespace: &Option<String>,
 ) -> TokenError {
     use biscuit::error::{Logic, Token};
 
@@ -224,22 +206,8 @@ fn convert_capability_error(
 
                     let parsed_error = parse_check_failure(block_id, check_id, &rule);
 
-                    match parsed_error {
-                        TokenError::NamespaceMismatch {
-                            expected,
-                            block_id,
-                            check_id,
-                            ..
-                        } => {
-                            return TokenError::NamespaceMismatch {
-                                expected,
-                                provided: namespace.clone(),
-                                block_id,
-                                check_id,
-                            };
-                        }
-                        TokenError::Expired { .. } => return parsed_error,
-                        _ => {}
+                    if matches!(parsed_error, TokenError::Expired { .. }) {
+                        return parsed_error;
                     }
                 }
 

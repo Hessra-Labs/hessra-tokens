@@ -1,5 +1,5 @@
 extern crate biscuit_auth as biscuit;
-use biscuit::macros::{authorizer, fact, policy};
+use biscuit::macros::{authorizer, policy};
 use chrono::Utc;
 use hessra_token_core::{Biscuit, PublicKey, TokenError, parse_check_failure};
 
@@ -8,8 +8,6 @@ pub struct IdentityVerifier {
     token: String,
     public_key: PublicKey,
     identity: Option<String>,
-    namespace: Option<String>,
-    ensure_subject_in_namespace: bool,
 }
 
 impl IdentityVerifier {
@@ -19,8 +17,6 @@ impl IdentityVerifier {
             token,
             public_key,
             identity: None,
-            namespace: None,
-            ensure_subject_in_namespace: false,
         }
     }
 
@@ -30,27 +26,14 @@ impl IdentityVerifier {
         self
     }
 
-    /// Adds a namespace restriction to the verification.
-    pub fn with_namespace(mut self, namespace: String) -> Self {
-        self.namespace = Some(namespace);
-        self
-    }
-
-    /// Ensures that the subject is associated with the namespace.
-    pub fn ensure_subject_in_namespace(mut self) -> Self {
-        self.ensure_subject_in_namespace = true;
-        self
-    }
-
     /// Performs the token verification with the configured parameters.
     pub fn verify(self) -> Result<(), TokenError> {
         let biscuit = Biscuit::from_base64(&self.token, self.public_key)?;
         let now = Utc::now().timestamp();
 
         let expected_identity = self.identity.clone();
-        let expected_namespace = self.namespace.clone();
 
-        let mut authz = if let Some(identity) = self.identity {
+        let authz = if let Some(identity) = self.identity {
             authorizer!(
                 r#"
                     time({now});
@@ -66,23 +49,11 @@ impl IdentityVerifier {
             )
         };
 
-        if let Some(namespace) = self.namespace {
-            authz = authz.fact(fact!(r#"namespace({namespace});"#))?;
-        }
-
-        if self.ensure_subject_in_namespace {
-            authz = authz.policy(policy!(
-                r#"
-                    allow if subject($d, $s), namespace($d), subject($s);
-                "#
-            ))?;
-        } else {
-            authz = authz.policy(policy!(
-                r#"
+        let authz = authz.policy(policy!(
+            r#"
                     allow if true;
                 "#
-            ))?;
-        }
+        ))?;
 
         let mut authz = authz
             .build(&biscuit)
@@ -90,11 +61,7 @@ impl IdentityVerifier {
 
         match authz.authorize() {
             Ok(_) => Ok(()),
-            Err(e) => Err(convert_identity_verification_error(
-                e,
-                expected_identity,
-                expected_namespace,
-            )),
+            Err(e) => Err(convert_identity_verification_error(e, expected_identity)),
         }
     }
 }
@@ -102,7 +69,6 @@ impl IdentityVerifier {
 fn convert_identity_verification_error(
     err: biscuit::error::Token,
     expected_identity: Option<String>,
-    expected_namespace: Option<String>,
 ) -> TokenError {
     use biscuit::error::{Logic, Token};
 
@@ -124,17 +90,6 @@ fn convert_identity_verification_error(
                     let parsed_error = parse_check_failure(block_id, check_id, &rule);
 
                     let enhanced_error = match &parsed_error {
-                        TokenError::NamespaceMismatch {
-                            expected,
-                            block_id,
-                            check_id,
-                            ..
-                        } => TokenError::NamespaceMismatch {
-                            expected: expected.clone(),
-                            provided: expected_namespace.clone(),
-                            block_id: *block_id,
-                            check_id: *check_id,
-                        },
                         TokenError::IdentityMismatch { expected, .. } => {
                             if let Some(identity) = &expected_identity {
                                 TokenError::IdentityMismatch {

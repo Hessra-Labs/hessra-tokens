@@ -50,22 +50,6 @@ pub enum TokenError {
         check_id: u32,
     },
 
-    /// Namespace restriction check failed
-    #[error("Namespace mismatch: expected '{expected}', {}", match provided {
-        Some(p) => format!("got '{p}'"),
-        None => "no namespace provided".to_string(),
-    })]
-    NamespaceMismatch {
-        /// Expected namespace from token
-        expected: String,
-        /// Namespace provided during verification (if any)
-        provided: Option<String>,
-        /// Block ID where the check failed
-        block_id: u32,
-        /// Check ID within the block
-        check_id: u32,
-    },
-
     /// A generic check failed (couldn't parse semantic meaning)
     #[error("Verification check failed in block {block_id}, check {check_id}: {rule}")]
     CheckFailed {
@@ -206,11 +190,6 @@ impl TokenError {
         matches!(self, TokenError::Expired { .. })
     }
 
-    /// Check if this error is due to namespace mismatch
-    pub fn is_namespace_mismatch(&self) -> bool {
-        matches!(self, TokenError::NamespaceMismatch { .. })
-    }
-
     /// Check if this error is due to identity mismatch
     pub fn is_identity_mismatch(&self) -> bool {
         matches!(
@@ -239,14 +218,6 @@ impl TokenError {
     pub fn get_expiration_time(&self) -> Option<i64> {
         match self {
             TokenError::Expired { expired_at, .. } => Some(*expired_at),
-            _ => None,
-        }
-    }
-
-    /// Get the expected namespace if this is a namespace mismatch error
-    pub fn get_expected_namespace(&self) -> Option<&str> {
-        match self {
-            TokenError::NamespaceMismatch { expected, .. } => Some(expected.as_str()),
             _ => None,
         }
     }

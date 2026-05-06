@@ -34,7 +34,7 @@ pub struct HessraCapability {
     resource: Option<String>,
     operation: Option<String>,
     time_config: TokenTimeConfig,
-    namespace: Option<String>,
+    anchor: Option<String>,
 }
 
 impl HessraCapability {
@@ -56,19 +56,32 @@ impl HessraCapability {
             resource: Some(resource),
             operation: Some(operation),
             time_config,
-            namespace: None,
+            anchor: None,
         }
     }
 
-    /// Restricts the capability to a specific namespace.
+    /// Anchors the capability to a specific principal as the only authority
+    /// that can verify it.
     ///
-    /// Adds a namespace restriction check to the authority block:
-    /// - `check if namespace({namespace})`
+    /// Adds an anchor designation check to the authority block:
+    /// - `check if designation("anchor", {anchor})`
+    ///
+    /// At verify time, the verifier proves "I am `<anchor>`" by supplying
+    /// `Designation { label: "anchor", value: <its-own-principal-name> }`. The
+    /// check passes iff the verifier's claimed principal name equals the anchor
+    /// value embedded here. This means the capability is honored only by the
+    /// anchor principal. A receiving principal can attenuate the capability and
+    /// delegate it to other principals, but the resulting capability still must
+    /// be presented back to the anchor for verification. It cannot be redirected
+    /// to any other verifying authority.
+    ///
+    /// The anchor lives in the authority block, so it cannot be added or removed
+    /// by subsequent third-party attenuation.
     ///
     /// # Arguments
-    /// * `namespace` - The namespace to restrict to (e.g., "myapp.hessra.dev")
-    pub fn namespace_restricted(mut self, namespace: String) -> Self {
-        self.namespace = Some(namespace);
+    /// * `anchor` - The principal whose verifier this capability is bound to
+    pub fn anchor_bound(mut self, anchor: String) -> Self {
+        self.anchor = Some(anchor);
         self
     }
 
@@ -86,7 +99,7 @@ impl HessraCapability {
             .unwrap_or_else(|| Utc::now().timestamp());
         let expiration = start_time + self.time_config.duration;
 
-        let namespace = self.namespace;
+        let anchor = self.anchor;
 
         let subject = self.subject.ok_or("Token requires subject")?;
         let resource = self.resource.ok_or("Token requires resource")?;
@@ -104,11 +117,15 @@ impl HessraCapability {
             "#
         );
 
-        // Add namespace restriction if specified
-        if let Some(namespace) = namespace {
+        // Add the anchor designation if specified. The anchor binds the
+        // capability to one named principal as the only authority that can
+        // verify it. The check lives at the authority block so it cannot be
+        // added or removed by subsequent attenuation.
+        if let Some(anchor) = anchor {
+            let anchor_label = "anchor".to_string();
             biscuit_builder = biscuit_builder.check(check!(
                 r#"
-                    check if namespace({namespace});
+                    check if designation({anchor_label}, {anchor});
                 "#
             ))?;
         }
@@ -298,7 +315,10 @@ mod tests {
     }
 
     #[test]
-    fn test_namespace_restricted_capability() {
+    fn test_anchor_bound_capability() {
+        // Anchor binds the capability to one named principal as the only
+        // authority that can verify it. The verifier proves "I am `<anchor>`"
+        // by supplying `designation("anchor", <its-own-principal-name>)`.
         let keypair = KeyPair::new();
         let public_key = keypair.public();
 
@@ -308,22 +328,22 @@ mod tests {
             "read".to_string(),
             TokenTimeConfig::default(),
         )
-        .namespace_restricted("myapp.hessra.dev".to_string())
+        .anchor_bound("webapp".to_string())
         .issue(&keypair)
-        .expect("Failed to create namespace-restricted token");
+        .expect("Failed to create anchor-bound token");
 
-        // Should pass with matching namespace
+        // Webapp's verifier asserts "I am webapp", check passes.
         let res = CapabilityVerifier::new(
             token.clone(),
             public_key,
             "resource1".to_string(),
             "read".to_string(),
         )
-        .with_namespace("myapp.hessra.dev".to_string())
+        .with_designation("anchor".to_string(), "webapp".to_string())
         .verify();
-        assert!(res.is_ok(), "Should pass with matching namespace");
+        assert!(res.is_ok(), "Verification at the anchor should succeed");
 
-        // Should fail without namespace
+        // Without the anchor designation, the capability fails closed.
         let res = CapabilityVerifier::new(
             token.clone(),
             public_key,
@@ -331,18 +351,83 @@ mod tests {
             "read".to_string(),
         )
         .verify();
-        assert!(res.is_err(), "Should fail without namespace");
+        assert!(
+            res.is_err(),
+            "Should fail when verifier does not assert any anchor"
+        );
 
-        // Should fail with wrong namespace
+        // A peer service `bobapp` asserting "I am bobapp" cannot honor a
+        // capability anchored at webapp.
         let res = CapabilityVerifier::new(
             token.clone(),
             public_key,
             "resource1".to_string(),
             "read".to_string(),
         )
-        .with_namespace("wrong.com".to_string())
+        .with_designation("anchor".to_string(), "bobapp".to_string())
         .verify();
-        assert!(res.is_err(), "Should fail with wrong namespace");
+        assert!(
+            res.is_err(),
+            "Should fail when verifier's claimed principal is not the anchor"
+        );
+    }
+
+    #[test]
+    fn test_anchor_survives_attenuation() {
+        // The anchor check lives in the authority block, so subsequent
+        // third-party attenuations (including arbitrary designations added by
+        // the recipient before delegating downward) cannot strip the anchor
+        // binding.
+        let keypair = KeyPair::new();
+        let public_key = keypair.public();
+
+        let token = HessraCapability::new(
+            "alice".to_string(),
+            "resource1".to_string(),
+            "read".to_string(),
+            TokenTimeConfig::default(),
+        )
+        .anchor_bound("webapp".to_string())
+        .issue(&keypair)
+        .expect("Failed to create token");
+
+        // Recipient (webapp) attenuates with a per-user designation before
+        // handing the capability downward.
+        let attenuated = crate::attenuate::DesignationBuilder::from_base64(token, public_key)
+            .expect("Failed to create designation builder")
+            .designate("user".to_string(), "alice".to_string())
+            .attenuate_base64()
+            .expect("Failed to attenuate");
+
+        // Webapp's verifier asserts "I am webapp" and supplies the per-user
+        // designation. Verification succeeds.
+        let res = CapabilityVerifier::new(
+            attenuated.clone(),
+            public_key,
+            "resource1".to_string(),
+            "read".to_string(),
+        )
+        .with_designation("anchor".to_string(), "webapp".to_string())
+        .with_designation("user".to_string(), "alice".to_string())
+        .verify();
+        assert!(
+            res.is_ok(),
+            "Verifier at the anchor should succeed with all designations"
+        );
+
+        // Even after attenuation, omitting the anchor assertion fails closed.
+        let res = CapabilityVerifier::new(
+            attenuated,
+            public_key,
+            "resource1".to_string(),
+            "read".to_string(),
+        )
+        .with_designation("user".to_string(), "alice".to_string())
+        .verify();
+        assert!(
+            res.is_err(),
+            "Anchor check survives attenuation, still required at verify"
+        );
     }
 
     #[test]
@@ -444,55 +529,6 @@ mod tests {
         .with_designation("tenant_id".to_string(), "t-123".to_string())
         .verify();
         assert!(res.is_err(), "Should fail with missing designation");
-    }
-
-    #[test]
-    fn test_namespace_plus_designation() {
-        let keypair = KeyPair::new();
-        let public_key = keypair.public();
-
-        let token = HessraCapability::new(
-            "alice".to_string(),
-            "resource1".to_string(),
-            "read".to_string(),
-            TokenTimeConfig::default(),
-        )
-        .namespace_restricted("myapp.hessra.dev".to_string())
-        .issue(&keypair)
-        .expect("Failed to create token");
-
-        // Attenuate with designation
-        let attenuated = crate::attenuate::DesignationBuilder::from_base64(token, public_key)
-            .expect("Failed to create designation builder")
-            .designate("tenant_id".to_string(), "t-123".to_string())
-            .attenuate_base64()
-            .expect("Failed to attenuate");
-
-        // Verify with both namespace and designation
-        let res = CapabilityVerifier::new(
-            attenuated.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_namespace("myapp.hessra.dev".to_string())
-        .with_designation("tenant_id".to_string(), "t-123".to_string())
-        .verify();
-        assert!(
-            res.is_ok(),
-            "Should pass with both namespace and designation"
-        );
-
-        // Should fail without namespace
-        let res = CapabilityVerifier::new(
-            attenuated.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_designation("tenant_id".to_string(), "t-123".to_string())
-        .verify();
-        assert!(res.is_err(), "Should fail without namespace");
     }
 
     #[test]

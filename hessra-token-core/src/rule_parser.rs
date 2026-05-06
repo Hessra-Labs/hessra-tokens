@@ -11,11 +11,6 @@ pub fn parse_check_failure(block_id: u32, check_id: u32, rule: &str) -> TokenErr
         return error;
     }
 
-    // Try parsing as namespace check
-    if let Some(error) = try_parse_namespace(block_id, check_id, rule) {
-        return error;
-    }
-
     // Try parsing as identity check
     if let Some(error) = try_parse_identity(block_id, check_id, rule) {
         return error;
@@ -54,27 +49,6 @@ fn try_parse_expiration(block_id: u32, check_id: u32, rule: &str) -> Option<Toke
         return Some(TokenError::Expired {
             expired_at,
             current_time,
-            block_id,
-            check_id,
-        });
-    }
-
-    None
-}
-
-/// Try to parse a namespace check failure
-/// Pattern: "check if namespace("example.com")"
-fn try_parse_namespace(block_id: u32, check_id: u32, rule: &str) -> Option<TokenError> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r#"check if namespace\("([^"]+)"\)"#).unwrap());
-
-    if let Some(captures) = re.captures(rule)
-        && let Some(namespace_match) = captures.get(1)
-    {
-        let expected = namespace_match.as_str().to_string();
-        return Some(TokenError::NamespaceMismatch {
-            expected,
-            provided: None,
             block_id,
             check_id,
         });
@@ -193,19 +167,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_namespace() {
-        let rule = r#"check if namespace("example.com")"#;
-        let error = try_parse_namespace(0, 0, rule);
-
-        assert!(error.is_some());
-        if let Some(TokenError::NamespaceMismatch { expected, .. }) = error {
-            assert_eq!(expected, "example.com");
-        } else {
-            panic!("Expected NamespaceMismatch error");
-        }
-    }
-
-    #[test]
     fn test_parse_identity() {
         let rule = r#"check if actor($a), $a == "user@example.com""#;
         let error = try_parse_identity(0, 0, rule);
@@ -253,14 +214,6 @@ mod tests {
         let error = parse_check_failure(0, 0, rule);
 
         assert!(matches!(error, TokenError::Expired { .. }));
-    }
-
-    #[test]
-    fn test_parse_check_failure_namespace() {
-        let rule = r#"check if namespace("example.com")"#;
-        let error = parse_check_failure(0, 0, rule);
-
-        assert!(matches!(error, TokenError::NamespaceMismatch { .. }));
     }
 
     #[test]

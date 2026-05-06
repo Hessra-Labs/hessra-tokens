@@ -1,6 +1,6 @@
 extern crate biscuit_auth as biscuit;
 
-use biscuit::macros::{biscuit, check, rule};
+use biscuit::macros::biscuit;
 use chrono::Utc;
 use hessra_token_core::{KeyPair, TokenTimeConfig};
 use std::error::Error;
@@ -9,8 +9,7 @@ use std::error::Error;
 ///
 /// # Terminology
 /// - **Realm identity**: A configured principal inside a Realm (default, non-delegatable)
-/// - **Domain identity**: A realm identity restricted to a specific namespace
-/// - **Delegatable identity**: An identity token that can be attenuated/delegated further
+/// - **Delegatable identity**: An identity token that can be attenuated and delegated further
 ///
 /// # Example
 /// ```rust
@@ -25,10 +24,9 @@ use std::error::Error;
 ///     .issue(&keypair)
 ///     .expect("Failed to create token");
 ///
-/// // Delegatable namespace identity
+/// // Delegatable identity
 /// let token = HessraIdentity::new(subject, TokenTimeConfig::default())
 ///     .delegatable(true)
-///     .namespace_restricted("myapp.hessra.dev".to_string())
 ///     .issue(&keypair)
 ///     .expect("Failed to create token");
 /// ```
@@ -36,7 +34,6 @@ pub struct HessraIdentity {
     subject: String,
     time_config: TokenTimeConfig,
     is_delegatable: bool,
-    namespace: Option<String>,
 }
 
 impl HessraIdentity {
@@ -50,7 +47,6 @@ impl HessraIdentity {
             subject,
             time_config,
             is_delegatable: false,
-            namespace: None,
         }
     }
 
@@ -67,20 +63,6 @@ impl HessraIdentity {
     /// * `enabled` - Whether to enable delegation (false is noop)
     pub fn delegatable(mut self, enabled: bool) -> Self {
         self.is_delegatable = enabled;
-        self
-    }
-
-    /// Restricts the identity to a specific namespace.
-    ///
-    /// Adds a namespace restriction check to the authority block:
-    /// - `check if namespace({namespace})`
-    ///
-    /// This creates a "namespace identity" that can only be used within the specified namespace.
-    ///
-    /// # Arguments
-    /// * `namespace` - The namespace to restrict to (e.g., "myapp.hessra.dev")
-    pub fn namespace_restricted(mut self, namespace: String) -> Self {
-        self.namespace = Some(namespace);
         self
     }
 
@@ -101,10 +83,9 @@ impl HessraIdentity {
         // Extract self fields for use in macro (macro doesn't support self.field directly)
         let subject = self.subject;
         let is_delegatable = self.is_delegatable;
-        let namespace = self.namespace;
 
         // Build the base biscuit with subject and time checks
-        let mut biscuit_builder = if is_delegatable {
+        let biscuit_builder = if is_delegatable {
             // Delegatable identity: allows hierarchical actor check
             biscuit!(
                 r#"
@@ -123,22 +104,6 @@ impl HessraIdentity {
                 "#
             )
         };
-
-        // Add namespace restriction if specified
-        if let Some(namespace) = namespace {
-            biscuit_builder = biscuit_builder.check(check!(
-                r#"
-                    check if namespace({namespace});
-                "#
-            ))?;
-            // This rule creates a fact that the subject is associated with the namespace,
-            // so that verifier can be sure that the subject is associated with the namespace.
-            biscuit_builder = biscuit_builder.rule(rule!(
-                r#"
-                    subject($d, $s) <- namespace($d), subject($s);
-                "#
-            ))?;
-        }
 
         // Build and sign the biscuit
         let biscuit = biscuit_builder.build(keypair)?;
