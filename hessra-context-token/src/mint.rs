@@ -1,14 +1,17 @@
 extern crate biscuit_auth as biscuit;
 
-use biscuit::macros::biscuit;
+use biscuit::builder::BiscuitBuilder;
+use biscuit::macros::{biscuit, fact};
 use chrono::Utc;
 use hessra_token_core::{KeyPair, TokenTimeConfig};
 use std::error::Error;
 
 /// Builder for creating Hessra context tokens.
 ///
-/// Context tokens identify a session and track data exposure (exposure labels)
-/// as append-only Biscuit blocks.
+/// Context tokens identify a session and track data exposure as biscuit blocks.
+/// Initial exposure labels (known at mint time) are stacked into the authority
+/// block as sibling facts; subsequent exposures are added via `add_exposure`
+/// in third-party blocks signed by the same issuer.
 ///
 /// # Example
 /// ```rust
@@ -26,6 +29,8 @@ use std::error::Error;
 pub struct HessraContext {
     subject: String,
     time_config: TokenTimeConfig,
+    initial_exposures: Vec<String>,
+    initial_source: Option<String>,
 }
 
 impl HessraContext {
@@ -38,20 +43,35 @@ impl HessraContext {
         Self {
             subject,
             time_config,
+            initial_exposures: Vec::new(),
+            initial_source: None,
         }
+    }
+
+    /// Stack initial exposure labels into the authority block.
+    ///
+    /// All labels in `labels` land in the same authority block alongside the
+    /// `context(subject)` fact, paired with one `exposure_source` and one
+    /// `exposure_time`. Multiple calls accumulate labels; the most recent
+    /// source replaces any earlier one (initial exposures share a single
+    /// source by design).
+    pub fn with_initial_exposures(mut self, labels: &[String], source: impl Into<String>) -> Self {
+        for label in labels {
+            if !self.initial_exposures.contains(label) {
+                self.initial_exposures.push(label.clone());
+            }
+        }
+        self.initial_source = Some(source.into());
+        self
     }
 
     /// Issues (builds and signs) the context token.
     ///
     /// The authority block contains:
     /// - `context({subject})` - identifies the session owner
+    /// - `exposure({label})` facts for each initial exposure (if any)
+    /// - `exposure_source({source})` and `exposure_time({now})` (if any exposures)
     /// - time expiration check
-    ///
-    /// # Arguments
-    /// * `keypair` - The keypair to sign the token with
-    ///
-    /// # Returns
-    /// Base64-encoded Biscuit token
     pub fn issue(self, keypair: &KeyPair) -> Result<String, Box<dyn Error>> {
         let start_time = self
             .time_config
@@ -60,12 +80,24 @@ impl HessraContext {
         let expiration = start_time + self.time_config.duration;
         let subject = self.subject;
 
-        let builder = biscuit!(
+        let mut builder: BiscuitBuilder = biscuit!(
             r#"
                 context({subject});
                 check if time($time), $time < {expiration};
             "#
         );
+
+        if !self.initial_exposures.is_empty() {
+            let now = Utc::now().timestamp();
+            for label in &self.initial_exposures {
+                let label = label.clone();
+                builder = builder.fact(fact!(r#"exposure({label});"#))?;
+            }
+            if let Some(source) = self.initial_source {
+                builder = builder.fact(fact!(r#"exposure_source({source});"#))?;
+            }
+            builder = builder.fact(fact!(r#"exposure_time({now});"#))?;
+        }
 
         let biscuit = builder.build(keypair)?;
         let token = biscuit.to_base64()?;
@@ -90,7 +122,6 @@ mod tests {
 
         assert!(!token.is_empty());
 
-        // Should verify successfully
         ContextVerifier::new(token, public_key)
             .verify()
             .expect("Should verify fresh context token");
@@ -124,7 +155,7 @@ mod tests {
 
         let config = TokenTimeConfig {
             start_time: None,
-            duration: 7200, // 2 hours
+            duration: 7200,
         };
 
         let token = HessraContext::new("agent:test".to_string(), config)
@@ -134,5 +165,35 @@ mod tests {
         ContextVerifier::new(token, public_key)
             .verify()
             .expect("Should verify context token with custom duration");
+    }
+
+    #[test]
+    fn test_initial_exposures_stacked_in_authority_block() {
+        let keypair = KeyPair::new();
+        let public_key = keypair.public();
+
+        let token = HessraContext::new("agent:openclaw".to_string(), TokenTimeConfig::default())
+            .with_initial_exposures(
+                &["PII:email".to_string(), "PII:address".to_string()],
+                "data:user-profile",
+            )
+            .issue(&keypair)
+            .expect("Failed to create context token with initial exposures");
+
+        // Both labels should be queryable, and the token should still have
+        // only one block (the authority block).
+        let biscuit =
+            biscuit::Biscuit::from_base64(&token, public_key).expect("Failed to parse token");
+        assert_eq!(
+            biscuit.block_count(),
+            1,
+            "Initial exposures must be stacked into the authority block, not split into separate blocks"
+        );
+
+        let labels = crate::exposure::extract_exposure_labels(&token, public_key)
+            .expect("Failed to extract initial exposure labels");
+        assert_eq!(labels.len(), 2);
+        assert!(labels.contains(&"PII:email".to_string()));
+        assert!(labels.contains(&"PII:address".to_string()));
     }
 }

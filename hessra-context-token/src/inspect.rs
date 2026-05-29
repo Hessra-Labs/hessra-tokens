@@ -1,6 +1,6 @@
 extern crate biscuit_auth as biscuit;
 
-use biscuit::macros::authorizer;
+use biscuit::macros::{authorizer, rule};
 use chrono::Utc;
 use hessra_token_core::{Biscuit, PublicKey, TokenError};
 
@@ -9,33 +9,27 @@ use hessra_token_core::{Biscuit, PublicKey, TokenError};
 pub struct ContextInspectResult {
     /// The subject (session owner) in the context token.
     pub subject: String,
-    /// The exposure labels accumulated in the context token.
+    /// The exposure labels accumulated in the context token (issuer-attested).
     pub exposure_labels: Vec<String>,
-    /// The exposure sources that contributed exposure labels.
+    /// The exposure sources that contributed exposure labels (issuer-attested).
     pub exposure_sources: Vec<String>,
     /// Unix timestamp when the token expires (if extractable).
     pub expiry: Option<i64>,
     /// Whether the token is currently expired.
     pub is_expired: bool,
-    /// Number of exposure blocks appended to the token.
+    /// Number of exposure blocks: every block past the authority block is
+    /// an issuer exposure block under the third-party scheme.
     pub exposure_block_count: usize,
 }
 
 /// Inspects a context token to extract session and exposure information.
 ///
-/// This performs signature verification but does not enforce time checks,
-/// so expired tokens can still be inspected.
+/// All exposure data is fetched via Datalog queries scoped with
+/// `trusting authority, {public_key}`, so only facts attested by the issuer
+/// surface here.
 ///
 /// This is a diagnostic method. No authorization decision should flow from
-/// inspect output. For authorization checks, use
-/// `ContextVerifier::check_precluded_exposures` instead.
-///
-/// # Arguments
-/// * `token` - The base64-encoded context token
-/// * `public_key` - The public key used to verify the token signature
-///
-/// # Returns
-/// Inspection result with subject, exposure labels, sources, and expiry info
+/// inspect output -- use `ContextVerifier::excludes(...).verify()` for that.
 pub fn inspect_context_token(
     token: String,
     public_key: PublicKey,
@@ -43,61 +37,55 @@ pub fn inspect_context_token(
     let biscuit = Biscuit::from_base64(&token, public_key)?;
     let now = Utc::now().timestamp();
 
-    // Extract the subject from the authority block via an authorizer query
-    let authorizer = authorizer!(
+    let authz = authorizer!(
         r#"
             time({now});
             allow if true;
         "#
     );
 
-    let mut authorizer = authorizer
+    let mut authorizer = authz
         .build(&biscuit)
         .map_err(|e| TokenError::internal(format!("failed to build authorizer: {e}")))?;
 
     let subjects: Vec<(String,)> = authorizer
         .query("data($name) <- context($name)")
         .map_err(|e| TokenError::internal(format!("failed to query context subject: {e}")))?;
-
     let subject = subjects.first().map(|(s,)| s.clone()).unwrap_or_default();
 
-    // Extract exposure labels and sources from block source strings
-    let mut exposure_labels = Vec::new();
-    let mut exposure_sources = Vec::new();
-    let mut exposure_block_count = 0;
+    let pk = public_key;
+    let label_results: Vec<(String,)> = authorizer
+        .query_all(rule!(
+            r#"data($l) <- exposure($l) trusting authority, {pk}"#
+        ))
+        .map_err(|e| TokenError::internal(format!("failed to query exposure labels: {e}")))?;
 
-    let block_count = biscuit.block_count();
-    for i in 0..block_count {
-        let block_source = biscuit.print_block_source(i).unwrap_or_default();
-        let mut block_has_exposure = false;
-
-        for line in block_source.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("exposure(")
-                && let Some(label_str) = rest.strip_suffix(");")
-            {
-                let label = label_str.trim_matches('"').to_string();
-                if !exposure_labels.contains(&label) {
-                    exposure_labels.push(label);
-                }
-                block_has_exposure = true;
-            }
-            if let Some(rest) = trimmed.strip_prefix("exposure_source(")
-                && let Some(source_str) = rest.strip_suffix(");")
-            {
-                let source = source_str.trim_matches('"').to_string();
-                if !exposure_sources.contains(&source) {
-                    exposure_sources.push(source);
-                }
-            }
-        }
-
-        if block_has_exposure {
-            exposure_block_count += 1;
+    let mut exposure_labels: Vec<String> = Vec::new();
+    for (label,) in label_results {
+        if !exposure_labels.contains(&label) {
+            exposure_labels.push(label);
         }
     }
 
-    // Extract expiry from token content
+    let source_results: Vec<(String,)> = authorizer
+        .query_all(rule!(
+            r#"data($s) <- exposure_source($s) trusting authority, {pk}"#
+        ))
+        .map_err(|e| TokenError::internal(format!("failed to query exposure sources: {e}")))?;
+
+    let mut exposure_sources: Vec<String> = Vec::new();
+    for (source,) in source_results {
+        if !exposure_sources.contains(&source) {
+            exposure_sources.push(source);
+        }
+    }
+
+    // Under the third-party scheme, every block past the authority block is
+    // an exposure block. (Initial exposures, if any, live in the authority
+    // block itself and are not counted here.)
+    let block_count = biscuit.block_count();
+    let exposure_block_count = block_count.saturating_sub(1);
+
     let token_content = biscuit.print();
     let expiry = extract_expiry_from_content(&token_content);
     let is_expired = expiry.is_some_and(|exp| exp < now);
@@ -175,7 +163,7 @@ mod tests {
 
         let exposed = add_exposure(
             &token,
-            public_key,
+            &keypair,
             &["PII:SSN".to_string()],
             "data:user-ssn".to_string(),
         )
@@ -201,7 +189,7 @@ mod tests {
 
         let exposed = add_exposure(
             &token,
-            public_key,
+            &keypair,
             &["PII:email".to_string(), "PII:address".to_string()],
             "data:user-profile".to_string(),
         )
@@ -209,7 +197,7 @@ mod tests {
 
         let more_exposed = add_exposure(
             &exposed,
-            public_key,
+            &keypair,
             &["PII:SSN".to_string()],
             "data:user-ssn".to_string(),
         )
@@ -225,6 +213,34 @@ mod tests {
         assert!(result.exposure_labels.contains(&"PII:SSN".to_string()));
         assert_eq!(result.exposure_sources.len(), 2);
         assert_eq!(result.exposure_block_count, 2);
+    }
+
+    #[test]
+    fn test_inspect_initial_exposures_in_authority_block() {
+        let keypair = KeyPair::new();
+        let public_key = keypair.public();
+
+        let token = HessraContext::new("agent:openclaw".to_string(), TokenTimeConfig::default())
+            .with_initial_exposures(
+                &["PII:email".to_string(), "PII:address".to_string()],
+                "data:user-profile",
+            )
+            .issue(&keypair)
+            .expect("Failed to create context token");
+
+        let result = inspect_context_token(token, public_key)
+            .expect("Failed to inspect token with initial exposures");
+
+        assert_eq!(result.subject, "agent:openclaw");
+        assert_eq!(result.exposure_labels.len(), 2);
+        assert!(result.exposure_labels.contains(&"PII:email".to_string()));
+        assert!(result.exposure_labels.contains(&"PII:address".to_string()));
+        assert_eq!(
+            result.exposure_sources,
+            vec!["data:user-profile".to_string()]
+        );
+        // Initial exposures live in the authority block; no third-party blocks added.
+        assert_eq!(result.exposure_block_count, 0);
     }
 
     #[test]

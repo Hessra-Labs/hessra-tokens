@@ -1,36 +1,38 @@
 //! Exposure tracking operations for context tokens.
 //!
-//! Exposure labels are added as append-only Biscuit blocks. Each block contains
-//! `exposure({label})` facts. Labels accumulate and cannot be removed.
+//! Each `add_exposure` call appends a third-party block signed by the issuer's
+//! keypair. All labels passed in a single call land in the same block as sibling
+//! `exposure({label})` facts (one block per logical exposure event). The
+//! `trusting authority, {pubkey}` scope on verifier rules and queries pins
+//! exposure facts to the issuer, so only issuer-attested labels participate
+//! in authorization or extraction.
 
 extern crate biscuit_auth as biscuit;
 
 use biscuit::Biscuit;
-use biscuit::macros::block;
+use biscuit::macros::{block, fact, rule};
 use chrono::Utc;
 use hessra_token_core::{KeyPair, PublicKey, TokenError};
 use std::error::Error;
 
-/// Add exposure labels to a context token.
+/// Append a batch of exposure labels to a context token in one third-party block.
 ///
-/// Creates a new Biscuit block containing `exposure({label})` facts for each
-/// provided label, and `exposure_source({source})` identifying where the exposure
-/// came from.
-///
-/// This operation is append-only: the resulting token has strictly more exposure
-/// than the input token.
+/// The new block is signed by `keypair` (the issuer's keypair) so that verifiers
+/// scoped with `trusting authority, {pubkey}` see these facts. All `labels` from
+/// this single call land in the same block alongside a single `exposure_source`
+/// and `exposure_time` fact.
 ///
 /// # Arguments
 /// * `token` - The base64-encoded context token
-/// * `public_key` - The public key used to verify the token signature
-/// * `labels` - The exposure labels to add (e.g., `["PII:SSN", "PII:email"]`)
+/// * `keypair` - The issuer's keypair (signs the new block; public key verifies the input)
+/// * `labels` - The exposure labels to add (stacked into one block)
 /// * `source` - The data source that produced the exposure (e.g., `"data:user-ssn"`)
 ///
 /// # Returns
-/// Updated base64-encoded context token with exposure labels appended
+/// Updated base64-encoded context token with one new third-party block appended.
 pub fn add_exposure(
     token: &str,
-    public_key: PublicKey,
+    keypair: &KeyPair,
     labels: &[String],
     source: String,
 ) -> Result<String, Box<dyn Error>> {
@@ -38,11 +40,11 @@ pub fn add_exposure(
         return Ok(token.to_string());
     }
 
+    let public_key = keypair.public();
     let biscuit = Biscuit::from_base64(token, public_key)?;
 
     let now = Utc::now().timestamp();
 
-    // Build a block with exposure facts
     let mut block_builder = block!(
         r#"
             exposure_source({source});
@@ -51,55 +53,61 @@ pub fn add_exposure(
     );
 
     for label in labels {
-        let label_str = label.clone();
-        block_builder = block_builder.fact(biscuit::macros::fact!(r#"exposure({label_str});"#))?;
+        let label = label.clone();
+        block_builder = block_builder.fact(fact!(r#"exposure({label});"#))?;
     }
 
-    let new_biscuit = biscuit.append(block_builder)?;
+    let third_party_request = biscuit.third_party_request()?;
+    let third_party_block = third_party_request.create_block(&keypair.private(), block_builder)?;
+    let new_biscuit = biscuit.append_third_party(public_key, third_party_block)?;
     let new_token = new_biscuit.to_base64()?;
 
     Ok(new_token)
 }
 
-/// Extract all exposure labels from a context token by parsing its Biscuit blocks.
+/// Extract all exposure labels attested by the issuer from a context token.
 ///
-/// Iterates through all blocks in the token looking for `exposure("label")` facts
-/// and returns the deduplicated set of labels.
+/// Runs a Datalog query scoped to `trusting authority, {public_key}`, which
+/// matches `exposure(...)` facts in the authority block and in third-party
+/// blocks signed by `public_key`. Facts from other origins are filtered out.
 ///
-/// This is a diagnostic/inspection method. For authorization decisions, use
-/// `ContextVerifier::check_precluded_exposures` instead, which delegates to the
-/// Biscuit authorization engine.
+/// This is a diagnostic/inspection method. For authorization decisions, build
+/// a `ContextVerifier` and chain `.excludes(...).verify()` instead.
 ///
 /// # Arguments
 /// * `token` - The base64-encoded context token
-/// * `public_key` - The public key used to verify the token signature
+/// * `public_key` - The public key used to verify the token signature and to scope the query
 ///
 /// # Returns
-/// Deduplicated list of exposure label strings
+/// Deduplicated list of exposure label strings.
 pub fn extract_exposure_labels(
     token: &str,
     public_key: PublicKey,
 ) -> Result<Vec<String>, TokenError> {
     let biscuit = Biscuit::from_base64(token, public_key)?;
+    let now = Utc::now().timestamp();
 
-    let mut labels = Vec::new();
+    let authz = biscuit::macros::authorizer!(
+        r#"
+            time({now});
+        "#
+    );
 
-    // Iterate through all blocks looking for exposure facts
-    let block_count = biscuit.block_count();
-    for i in 0..block_count {
-        let block_source = biscuit.print_block_source(i).unwrap_or_default();
-        // Parse exposure facts from block source: lines like `exposure("PII:SSN");`
-        for line in block_source.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("exposure(")
-                && let Some(label_str) = rest.strip_suffix(");")
-            {
-                // Remove quotes
-                let label = label_str.trim_matches('"').to_string();
-                if !labels.contains(&label) {
-                    labels.push(label);
-                }
-            }
+    let mut authorizer = authz
+        .build(&biscuit)
+        .map_err(|e| TokenError::internal(format!("failed to build authorizer: {e}")))?;
+
+    let pk = public_key;
+    let results: Vec<(String,)> = authorizer
+        .query_all(rule!(
+            r#"data($l) <- exposure($l) trusting authority, {pk}"#
+        ))
+        .map_err(|e| TokenError::internal(format!("failed to query exposure labels: {e}")))?;
+
+    let mut labels: Vec<String> = Vec::new();
+    for (label,) in results {
+        if !labels.contains(&label) {
+            labels.push(label);
         }
     }
 
@@ -108,19 +116,19 @@ pub fn extract_exposure_labels(
 
 /// Fork a context token for a sub-agent, inheriting the parent's exposure.
 ///
-/// Creates a fresh context token for the child subject, pre-populated with
-/// all of the parent's exposure labels. This prevents contamination laundering
-/// through delegation.
+/// Creates a fresh context token for the child subject, pre-populated with all
+/// of the parent's exposure labels stacked into the child's authority block.
+/// This prevents exposure laundering through delegation.
 ///
 /// # Arguments
 /// * `parent_token` - The base64-encoded parent context token
 /// * `parent_public_key` - The public key used to verify the parent token
 /// * `child_subject` - The child subject identifier (e.g., "agent:openclaw:subtask-1")
 /// * `time_config` - Time configuration for the child context token
-/// * `keypair` - The keypair to sign the child token with
+/// * `keypair` - The keypair to sign the child token with (same issuer)
 ///
 /// # Returns
-/// Base64-encoded child context token with inherited exposure
+/// Base64-encoded child context token with inherited exposure.
 pub fn fork_context(
     parent_token: &str,
     parent_public_key: PublicKey,
@@ -128,24 +136,13 @@ pub fn fork_context(
     time_config: hessra_token_core::TokenTimeConfig,
     keypair: &KeyPair,
 ) -> Result<String, Box<dyn Error>> {
-    // Extract parent's exposure labels
     let parent_labels = extract_exposure_labels(parent_token, parent_public_key)?;
 
-    // Create a fresh context for the child
-    let child_token = crate::mint::HessraContext::new(child_subject, time_config).issue(keypair)?;
-
-    // If parent has no exposure, just return the fresh child context
-    if parent_labels.is_empty() {
-        return Ok(child_token);
+    let mut builder = crate::mint::HessraContext::new(child_subject, time_config);
+    if !parent_labels.is_empty() {
+        builder = builder.with_initial_exposures(&parent_labels, "inherited");
     }
-
-    // Apply all parent exposure labels to the child
-    add_exposure(
-        &child_token,
-        keypair.public(),
-        &parent_labels,
-        "inherited".to_string(),
-    )
+    builder.issue(keypair)
 }
 
 #[cfg(test)]
@@ -163,14 +160,12 @@ mod tests {
             .issue(&keypair)
             .expect("Failed to create context token");
 
-        // No exposure initially
         let labels = extract_exposure_labels(&token, public_key).expect("Failed to extract labels");
         assert!(labels.is_empty());
 
-        // Add exposure
         let exposed = add_exposure(
             &token,
-            public_key,
+            &keypair,
             &["PII:SSN".to_string()],
             "data:user-ssn".to_string(),
         )
@@ -184,20 +179,19 @@ mod tests {
     #[test]
     fn test_add_empty_exposure_is_noop() {
         let keypair = KeyPair::new();
-        let public_key = keypair.public();
 
         let token = HessraContext::new("agent:test".to_string(), TokenTimeConfig::default())
             .issue(&keypair)
             .expect("Failed to create context token");
 
-        let result = add_exposure(&token, public_key, &[], "source".to_string())
+        let result = add_exposure(&token, &keypair, &[], "source".to_string())
             .expect("Failed with empty exposure");
 
         assert_eq!(result, token);
     }
 
     #[test]
-    fn test_multiple_exposure_labels() {
+    fn test_multiple_labels_stacked_in_one_block() {
         let keypair = KeyPair::new();
         let public_key = keypair.public();
 
@@ -207,21 +201,39 @@ mod tests {
 
         let exposed = add_exposure(
             &token,
-            public_key,
-            &["PII:email".to_string(), "PII:address".to_string()],
+            &keypair,
+            &[
+                "PII:email".to_string(),
+                "PII:address".to_string(),
+                "PII:SSN".to_string(),
+            ],
             "data:user-profile".to_string(),
         )
         .expect("Failed to add exposure");
 
+        // Three labels in a single call must produce exactly one new block.
+        let pre = Biscuit::from_base64(&token, public_key)
+            .unwrap()
+            .block_count();
+        let post = Biscuit::from_base64(&exposed, public_key)
+            .unwrap()
+            .block_count();
+        assert_eq!(
+            post,
+            pre + 1,
+            "all labels must land in one third-party block"
+        );
+
         let labels =
             extract_exposure_labels(&exposed, public_key).expect("Failed to extract labels");
-        assert_eq!(labels.len(), 2);
+        assert_eq!(labels.len(), 3);
         assert!(labels.contains(&"PII:email".to_string()));
         assert!(labels.contains(&"PII:address".to_string()));
+        assert!(labels.contains(&"PII:SSN".to_string()));
     }
 
     #[test]
-    fn test_cumulative_exposure() {
+    fn test_cumulative_exposure_across_calls() {
         let keypair = KeyPair::new();
         let public_key = keypair.public();
 
@@ -229,19 +241,17 @@ mod tests {
             .issue(&keypair)
             .expect("Failed to create context token");
 
-        // First exposure
         let exposed = add_exposure(
             &token,
-            public_key,
+            &keypair,
             &["PII:email".to_string(), "PII:address".to_string()],
             "data:user-profile".to_string(),
         )
         .expect("Failed to add first exposure");
 
-        // Second exposure
         let more_exposed = add_exposure(
             &exposed,
-            public_key,
+            &keypair,
             &["PII:SSN".to_string()],
             "data:user-ssn".to_string(),
         )
@@ -266,16 +276,15 @@ mod tests {
 
         let exposed = add_exposure(
             &token,
-            public_key,
+            &keypair,
             &["PII:SSN".to_string()],
             "data:user-ssn".to_string(),
         )
         .expect("Failed to add first exposure");
 
-        // Add same label again
         let double_exposed = add_exposure(
             &exposed,
-            public_key,
+            &keypair,
             &["PII:SSN".to_string()],
             "another-source".to_string(),
         )
@@ -296,16 +305,14 @@ mod tests {
             .issue(&keypair)
             .expect("Failed to create parent context");
 
-        // Expose the parent
         let exposed_parent = add_exposure(
             &parent,
-            public_key,
+            &keypair,
             &["PII:SSN".to_string()],
             "data:user-ssn".to_string(),
         )
         .expect("Failed to add exposure to parent");
 
-        // Fork for child
         let child = fork_context(
             &exposed_parent,
             public_key,
@@ -315,7 +322,6 @@ mod tests {
         )
         .expect("Failed to fork context");
 
-        // Child should inherit parent's exposure
         let child_labels =
             extract_exposure_labels(&child, public_key).expect("Failed to extract child labels");
         assert_eq!(child_labels, vec!["PII:SSN".to_string()]);
@@ -330,7 +336,6 @@ mod tests {
             .issue(&keypair)
             .expect("Failed to create parent context");
 
-        // Fork without any exposure on parent
         let child = fork_context(
             &parent,
             public_key,
@@ -354,10 +359,9 @@ mod tests {
             .issue(&keypair)
             .expect("Failed to create parent context");
 
-        // Add multiple exposure labels
         let exposed = add_exposure(
             &parent,
-            public_key,
+            &keypair,
             &["PII:email".to_string(), "PII:address".to_string()],
             "data:user-profile".to_string(),
         )
@@ -365,13 +369,12 @@ mod tests {
 
         let more_exposed = add_exposure(
             &exposed,
-            public_key,
+            &keypair,
             &["PII:SSN".to_string()],
             "data:user-ssn".to_string(),
         )
         .expect("Failed to add SSN exposure");
 
-        // Fork
         let child = fork_context(
             &more_exposed,
             public_key,
