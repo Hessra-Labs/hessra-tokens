@@ -11,13 +11,16 @@
 //! ## Key Properties
 //!
 //! - **Append-only**: Exposure labels accumulate and cannot be removed within a session.
-//! - **Issuer-attested**: Each exposure block is a third-party biscuit block signed by
-//!   the issuer's keypair. Verifier rules and queries use `trusting authority, {pubkey}`
-//!   to scope authorization decisions to issuer-attested facts only.
+//! - **Reject-based enforcement**: Each label is recorded as a `reject if exposure({label})`
+//!   rule. A verifier asserts the labels it cares about as `exposure({label})` facts; a
+//!   matching reject rule fails authorization. Reject rules are monotonic and apply to the
+//!   whole token regardless of which key signed them -- any party (even an ephemeral key)
+//!   can tighten a token, and no `trusting` scope is needed on the authz path.
+//! - **Enumerable**: Each label is also recorded as an `exposed_label({label})` metadata
+//!   fact (a separate predicate the reject rules never test), queried with
+//!   `trusting authority, {pubkey}` so only issuer-attested labels are reported.
 //! - **Block-stacked**: All labels added in a single call land in the same block.
 //! - **Inheritable**: Child contexts inherit parent exposure via `fork_context`.
-//! - **Pure Datalog authorization**: Exclusion checks run as biscuit deny policies.
-//!   No string parsing on the authz path.
 //!
 //! ## Authority Block
 //!
@@ -25,8 +28,10 @@
 //! context(subject);
 //! check if time($time), $time < expiration;
 //! // optional, only if mint-time exposures supplied:
-//! exposure(label_1);
-//! exposure(label_2);
+//! reject if exposure(label_1);
+//! exposed_label(label_1);
+//! reject if exposure(label_2);
+//! exposed_label(label_2);
 //! exposure_source(source);
 //! exposure_time(timestamp);
 //! ```
@@ -34,8 +39,10 @@
 //! ## Third-party exposure blocks (one per `add_exposure` call)
 //!
 //! ```datalog
-//! exposure(label_a);
-//! exposure(label_b);
+//! reject if exposure(label_a);
+//! exposed_label(label_a);
+//! reject if exposure(label_b);
+//! exposed_label(label_b);
 //! exposure_source(source);
 //! exposure_time(timestamp);
 //! ```

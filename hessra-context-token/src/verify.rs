@@ -1,16 +1,17 @@
 extern crate biscuit_auth as biscuit;
 
 use biscuit::Biscuit;
-use biscuit::macros::authorizer;
+use biscuit::macros::{authorizer, authorizer_merge};
 use chrono::Utc;
 use hessra_token_core::{PublicKey, TokenError};
 
 /// Verifier for context tokens with a fluent builder for exclusion checks.
 ///
 /// `.verify()` always enforces the signature + expiration. Each `.excludes(...)`
-/// accumulates a Datalog deny rule scoped with `trusting authority, {pubkey}`,
-/// so authorization fails if the token carries any of the excluded exposure
-/// labels attested by the issuer.
+/// asserts a candidate `exposure({label})` fact into the authorizer; if the
+/// token carries a matching `reject if exposure({label})` rule (added by any
+/// signer, in any block), that reject fires and authorization fails. No
+/// `trusting` scope is involved -- reject rules apply to the whole token.
 ///
 /// # Example
 /// ```rust
@@ -61,8 +62,9 @@ impl ContextVerifier {
 
     /// Add an exposure label that must NOT be present in the token.
     ///
-    /// Chainable. Each call accumulates one deny rule; any match blocks
-    /// the grant (OR semantics across all excluded labels).
+    /// Chainable. Each call asserts one candidate `exposure({label})` fact; if
+    /// the token rejects any of them, the grant is blocked (OR semantics across
+    /// all excluded labels).
     pub fn excludes(mut self, label: impl Into<String>) -> Self {
         self.excludes.push(label.into());
         self
@@ -70,53 +72,34 @@ impl ContextVerifier {
 
     /// Run authorization.
     ///
-    /// Always enforces signature + expiration. If any `.excludes(...)` labels
-    /// were registered, each is checked via a Datalog deny rule scoped to
-    /// `trusting authority, {pubkey}` so only issuer-attested facts can
-    /// trigger the deny.
+    /// Always enforces signature + expiration. Each `.excludes(...)` label is
+    /// asserted as an `exposure({label})` fact in a single authorizer pass; a
+    /// matching `reject if exposure({label})` rule anywhere in the token fires
+    /// the reject and fails verification.
     pub fn verify(self) -> Result<(), TokenError> {
         let biscuit = Biscuit::from_base64(&self.token, self.public_key)?;
         let now = Utc::now().timestamp();
-        let pk = self.public_key;
 
-        if self.excludes.is_empty() {
-            let authz = authorizer!(
-                r#"
-                    time({now});
-                    allow if true;
-                "#
-            );
+        // Assert the candidate exposure facts for every excluded label in one
+        // pass. A token reject rule for any of them aborts authorization; the
+        // empty case collapses to a plain signature + expiration check.
+        let mut authz = authorizer!(
+            r#"
+                time({now});
+                allow if true;
+            "#
+        );
 
-            authz
-                .build(&biscuit)
-                .map_err(|e| TokenError::internal(format!("failed to build authorizer: {e}")))?
-                .authorize()
-                .map_err(TokenError::from)?;
-
-            return Ok(());
-        }
-
-        // Check each excluded label with its own authorize() pass. Each pass
-        // uses the macro form for compile-time substitution of {now}, {pk},
-        // and {label}. Any deny match aborts with an error tagged by label.
         for excluded in &self.excludes {
             let label = excluded.clone();
-            let authz = authorizer!(
-                r#"
-                    time({now});
-                    deny if exposure({label}) trusting authority, {pk};
-                    allow if true;
-                "#
-            );
-
-            authz
-                .build(&biscuit)
-                .map_err(|e| TokenError::internal(format!("failed to build authorizer: {e}")))?
-                .authorize()
-                .map_err(|_| {
-                    TokenError::internal(format!("precluded exposure label present: {excluded}"))
-                })?;
+            authz = authorizer_merge!(authz, r#"exposure({label});"#);
         }
+
+        authz
+            .build(&biscuit)
+            .map_err(|e| TokenError::internal(format!("failed to build authorizer: {e}")))?
+            .authorize()
+            .map_err(TokenError::from)?;
 
         Ok(())
     }
@@ -391,25 +374,75 @@ mod tests {
             .expect("exposure4 is absent");
     }
 
-    /// Security-critical: exposure facts attested by a *different* keypair
-    /// must NOT trigger the issuer-scoped deny rule. The `trusting authority,
-    /// {issuer_pubkey}` scope is what enforces this.
+    /// By design under reject-if: a `reject if exposure(X)` appended by *any*
+    /// signer (here a throwaway/ephemeral keypair) is honored. Rejects are
+    /// monotonic -- they can only make a token more restrictive -- so no
+    /// `trusting` scope is needed and any party may tighten the token.
     #[test]
-    fn test_excludes_ignores_facts_from_other_signers() {
+    fn test_third_party_reject_from_ephemeral_key_applies() {
         let issuer = KeyPair::new();
         let issuer_pubkey = issuer.public();
 
+        let ephemeral = KeyPair::new();
+
+        let token = HessraContext::new("agent:test".to_string(), TokenTimeConfig::default())
+            .issue(&issuer)
+            .expect("Failed to mint");
+
+        // Append a reject rule signed by an unrelated ephemeral keypair.
+        let biscuit = Biscuit::from_base64(&token, issuer_pubkey).unwrap();
+        let third_party_request = biscuit.third_party_request().unwrap();
+        let reject_block = biscuit::macros::block!(r#"reject if exposure("blocked");"#);
+        let signed = third_party_request
+            .create_block(&ephemeral.private(), reject_block)
+            .unwrap();
+        let tightened = biscuit
+            .append_third_party(ephemeral.public(), signed)
+            .unwrap();
+        let tightened_token = tightened.to_base64().unwrap();
+
+        // The reject applies even though it was not signed by the issuer.
+        let result = ContextVerifier::new(tightened_token.clone(), issuer_pubkey)
+            .excludes("blocked")
+            .verify();
+        assert!(
+            result.is_err(),
+            "a reject appended by any signer must be honored"
+        );
+
+        // ...but only for the label it names.
+        ContextVerifier::new(tightened_token, issuer_pubkey)
+            .excludes("other")
+            .verify()
+            .expect("unrelated excludes must still pass");
+    }
+
+    /// An attacker-appended `exposure(X)` *fact* (not a reject) is inert: reject
+    /// rules in other blocks do not see sibling-block facts, and enumeration
+    /// reads `exposed_label`, not `exposure`. So it cannot cause a spurious
+    /// failure nor leak into the reported labels.
+    #[test]
+    fn test_injected_exposure_fact_is_inert() {
+        use crate::exposure::extract_exposure_labels;
+
+        let issuer = KeyPair::new();
+        let issuer_pubkey = issuer.public();
         let attacker = KeyPair::new();
 
         let token = HessraContext::new("agent:test".to_string(), TokenTimeConfig::default())
             .issue(&issuer)
             .expect("Failed to mint");
 
-        // Try to use the attacker's keypair to attest a third-party block.
-        // This will sign the block with the attacker's key but append it under
-        // the attacker's public key, NOT the issuer's. The `trusting authority,
-        // {issuer_pubkey}` scope on the deny rule should ignore it.
-        let biscuit = Biscuit::from_base64(&token, issuer_pubkey).unwrap();
+        let exposed = add_exposure(
+            &token,
+            &issuer,
+            &["PII:email".to_string()],
+            "data:user-profile".to_string(),
+        )
+        .expect("Failed to add exposure");
+
+        // Attacker grafts a bare exposure(...) fact in a third-party block.
+        let biscuit = Biscuit::from_base64(&exposed, issuer_pubkey).unwrap();
         let third_party_request = biscuit.third_party_request().unwrap();
         let attacker_block = biscuit::macros::block!(r#"exposure("PII:SSN");"#);
         let signed = third_party_request
@@ -420,11 +453,15 @@ mod tests {
             .unwrap();
         let tampered_token = tampered.to_base64().unwrap();
 
-        // The deny rule is scoped to the issuer's pubkey; the attacker-attested
-        // PII:SSN fact must NOT trigger it.
-        ContextVerifier::new(tampered_token, issuer_pubkey)
-            .excludes("PII:SSN")
+        // The injected fact does not trip an unrelated excludes check.
+        ContextVerifier::new(tampered_token.clone(), issuer_pubkey)
+            .excludes("PII:dob")
             .verify()
-            .expect("attacker-attested exposure must not affect issuer-scoped check");
+            .expect("a grafted exposure fact must not cause spurious failure");
+
+        // And it does not appear in the enumerated labels.
+        let labels = extract_exposure_labels(&tampered_token, issuer_pubkey)
+            .expect("Failed to extract labels");
+        assert_eq!(labels, vec!["PII:email".to_string()]);
     }
 }

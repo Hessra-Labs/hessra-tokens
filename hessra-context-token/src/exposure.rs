@@ -2,25 +2,26 @@
 //!
 //! Each `add_exposure` call appends a third-party block signed by the issuer's
 //! keypair. All labels passed in a single call land in the same block as sibling
-//! `exposure({label})` facts (one block per logical exposure event). The
-//! `trusting authority, {pubkey}` scope on verifier rules and queries pins
-//! exposure facts to the issuer, so only issuer-attested labels participate
-//! in authorization or extraction.
+//! `reject if exposure({label})` rules (one block per logical exposure event),
+//! each paired with an `exposed_label({label})` metadata fact. Enforcement flows
+//! from the reject rules (any signer can append one; no `trusting` scope needed),
+//! while enumeration queries the `exposed_label` facts scoped to
+//! `trusting authority, {pubkey}` so only issuer-attested labels are reported.
 
 extern crate biscuit_auth as biscuit;
 
 use biscuit::Biscuit;
-use biscuit::macros::{block, fact, rule};
+use biscuit::macros::{block, block_merge, rule};
 use chrono::Utc;
 use hessra_token_core::{KeyPair, PublicKey, TokenError};
 use std::error::Error;
 
 /// Append a batch of exposure labels to a context token in one third-party block.
 ///
-/// The new block is signed by `keypair` (the issuer's keypair) so that verifiers
-/// scoped with `trusting authority, {pubkey}` see these facts. All `labels` from
-/// this single call land in the same block alongside a single `exposure_source`
-/// and `exposure_time` fact.
+/// The new block is signed by `keypair` (the issuer's keypair). All `labels`
+/// from this single call land in the same block as `reject if exposure({label})`
+/// rules paired with `exposed_label({label})` facts, alongside a single
+/// `exposure_source` and `exposure_time` fact.
 ///
 /// # Arguments
 /// * `token` - The base64-encoded context token
@@ -54,7 +55,13 @@ pub fn add_exposure(
 
     for label in labels {
         let label = label.clone();
-        block_builder = block_builder.fact(fact!(r#"exposure({label});"#))?;
+        block_builder = block_merge!(
+            block_builder,
+            r#"
+                reject if exposure({label});
+                exposed_label({label});
+            "#
+        );
     }
 
     let third_party_request = biscuit.third_party_request()?;
@@ -68,7 +75,7 @@ pub fn add_exposure(
 /// Extract all exposure labels attested by the issuer from a context token.
 ///
 /// Runs a Datalog query scoped to `trusting authority, {public_key}`, which
-/// matches `exposure(...)` facts in the authority block and in third-party
+/// matches `exposed_label(...)` facts in the authority block and in third-party
 /// blocks signed by `public_key`. Facts from other origins are filtered out.
 ///
 /// This is a diagnostic/inspection method. For authorization decisions, build
@@ -100,7 +107,7 @@ pub fn extract_exposure_labels(
     let pk = public_key;
     let results: Vec<(String,)> = authorizer
         .query_all(rule!(
-            r#"data($l) <- exposure($l) trusting authority, {pk}"#
+            r#"data($l) <- exposed_label($l) trusting authority, {pk}"#
         ))
         .map_err(|e| TokenError::internal(format!("failed to query exposure labels: {e}")))?;
 

@@ -1,7 +1,7 @@
 extern crate biscuit_auth as biscuit;
 
 use biscuit::builder::BiscuitBuilder;
-use biscuit::macros::{biscuit, fact};
+use biscuit::macros::{biscuit, biscuit_merge};
 use chrono::Utc;
 use hessra_token_core::{KeyPair, TokenTimeConfig};
 use std::error::Error;
@@ -9,9 +9,10 @@ use std::error::Error;
 /// Builder for creating Hessra context tokens.
 ///
 /// Context tokens identify a session and track data exposure as biscuit blocks.
-/// Initial exposure labels (known at mint time) are stacked into the authority
-/// block as sibling facts; subsequent exposures are added via `add_exposure`
-/// in third-party blocks signed by the same issuer.
+/// Each exposure label becomes a `reject if exposure({label})` rule (plus an
+/// `exposed_label({label})` metadata fact for enumeration). Initial labels
+/// (known at mint time) are stacked into the authority block; subsequent
+/// exposures are added via `add_exposure` in third-party blocks.
 ///
 /// # Example
 /// ```rust
@@ -69,7 +70,9 @@ impl HessraContext {
     ///
     /// The authority block contains:
     /// - `context({subject})` - identifies the session owner
-    /// - `exposure({label})` facts for each initial exposure (if any)
+    /// - `reject if exposure({label})` rules for each initial exposure (if any),
+    ///   which fire when a verifier asserts the matching `exposure({label})` fact
+    /// - `exposed_label({label})` metadata facts for enumeration (if any)
     /// - `exposure_source({source})` and `exposure_time({now})` (if any exposures)
     /// - time expiration check
     pub fn issue(self, keypair: &KeyPair) -> Result<String, Box<dyn Error>> {
@@ -91,12 +94,18 @@ impl HessraContext {
             let now = Utc::now().timestamp();
             for label in &self.initial_exposures {
                 let label = label.clone();
-                builder = builder.fact(fact!(r#"exposure({label});"#))?;
+                builder = biscuit_merge!(
+                    builder,
+                    r#"
+                        reject if exposure({label});
+                        exposed_label({label});
+                    "#
+                );
             }
             if let Some(source) = self.initial_source {
-                builder = builder.fact(fact!(r#"exposure_source({source});"#))?;
+                builder = biscuit_merge!(builder, r#"exposure_source({source});"#);
             }
-            builder = builder.fact(fact!(r#"exposure_time({now});"#))?;
+            builder = biscuit_merge!(builder, r#"exposure_time({now});"#);
         }
 
         let biscuit = builder.build(keypair)?;

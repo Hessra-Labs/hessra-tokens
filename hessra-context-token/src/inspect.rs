@@ -56,7 +56,7 @@ pub fn inspect_context_token(
     let pk = public_key;
     let label_results: Vec<(String,)> = authorizer
         .query_all(rule!(
-            r#"data($l) <- exposure($l) trusting authority, {pk}"#
+            r#"data($l) <- exposed_label($l) trusting authority, {pk}"#
         ))
         .map_err(|e| TokenError::internal(format!("failed to query exposure labels: {e}")))?;
 
