@@ -72,6 +72,41 @@ pub fn add_exposure(
     Ok(new_token)
 }
 
+/// Append a two-label compound reject rule to a context token in a new
+/// third-party block.
+///
+/// Adds `reject if exposure({first}), exposure({second})`, which fires only
+/// when a verifier asserts BOTH facts in the same authorization pass —
+/// conjunction (`AND`) semantics that single-label rejects cannot express.
+/// Unlike [`add_exposure`], this records no `exposed_label` fact: a compound
+/// reject is policy structure (a label pair that precludes issuance), not an
+/// exposure attestation, so it is not reported by [`extract_exposure_labels`].
+///
+/// Compound rejects are normally seeded at mint via
+/// [`crate::mint::HessraContext::with_compound_reject`]; this function exists
+/// for the case where a principal needs to tighten an existing context token
+/// after issuance. The block is signed by `keypair`.
+pub fn add_compound_reject(
+    token: &str,
+    keypair: &KeyPair,
+    first: &str,
+    second: &str,
+) -> Result<String, Box<dyn Error>> {
+    let public_key = keypair.public();
+    let biscuit = Biscuit::from_base64(token, public_key)?;
+
+    let first = first.to_string();
+    let second = second.to_string();
+    let block_builder = block!(r#"reject if exposure({first}), exposure({second});"#);
+
+    let third_party_request = biscuit.third_party_request()?;
+    let third_party_block = third_party_request.create_block(&keypair.private(), block_builder)?;
+    let new_biscuit = biscuit.append_third_party(public_key, third_party_block)?;
+    let new_token = new_biscuit.to_base64()?;
+
+    Ok(new_token)
+}
+
 /// Extract all exposure labels attested by the issuer from a context token.
 ///
 /// Runs a Datalog query scoped to `trusting authority, {public_key}`, which
@@ -301,6 +336,39 @@ mod tests {
             extract_exposure_labels(&double_exposed, public_key).expect("Failed to extract labels");
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0], "PII:SSN");
+    }
+
+    #[test]
+    fn test_add_compound_reject_post_mint() {
+        let keypair = KeyPair::new();
+        let public_key = keypair.public();
+
+        let token = HessraContext::new("agent:test".to_string(), TokenTimeConfig::default())
+            .issue(&keypair)
+            .expect("Failed to create context token");
+
+        let tightened =
+            add_compound_reject(&token, &keypair, "credentials:local", "untrusted_input")
+                .expect("Failed to add compound reject");
+
+        // A compound reject records no attestation label.
+        let labels =
+            extract_exposure_labels(&tightened, public_key).expect("Failed to extract labels");
+        assert!(
+            labels.is_empty(),
+            "compound rejects must not be reported as exposure labels"
+        );
+
+        // It fires only when both labels are asserted.
+        crate::verify::ContextVerifier::new(tightened.clone(), public_key)
+            .excludes("credentials:local")
+            .verify()
+            .expect("single label must not fire the compound reject");
+        let result = crate::verify::ContextVerifier::new(tightened, public_key)
+            .excludes("credentials:local")
+            .excludes("untrusted_input")
+            .verify();
+        assert!(result.is_err(), "both labels must fire the compound reject");
     }
 
     #[test]

@@ -86,7 +86,7 @@ mod inspect;
 mod mint;
 mod verify;
 
-pub use exposure::{add_exposure, extract_exposure_labels, fork_context};
+pub use exposure::{add_compound_reject, add_exposure, extract_exposure_labels, fork_context};
 pub use inspect::{ContextInspectResult, inspect_context_token};
 pub use mint::HessraContext;
 pub use verify::ContextVerifier;
