@@ -4,7 +4,7 @@ use biscuit::Algorithm;
 use biscuit::macros::{authorizer, check, fact};
 use chrono::Utc;
 use hessra_token_core::{
-    Biscuit, PublicKey, TokenError, parse_capability_failure, parse_check_failure,
+    Biscuit, PublicKey, TokenError, TokenTimeConfig, parse_capability_failure, parse_check_failure,
 };
 
 /// Builder for verifying Hessra capability tokens with flexible configuration.
@@ -15,18 +15,16 @@ use hessra_token_core::{
 /// # Example
 /// ```no_run
 /// use hessra_cap_token::{CapabilityVerifier, HessraCapability};
-/// use hessra_token_core::{KeyPair, TokenTimeConfig};
+/// use hessra_token_core::KeyPair;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let keypair = KeyPair::new();
 /// let public_key = keypair.public();
-/// let token = HessraCapability::new(
-///     "user123".to_string(),
-///     "resource456".to_string(),
-///     "read".to_string(),
-///     TokenTimeConfig::default(),
-/// )
-/// .issue(&keypair)?;
+/// let token = HessraCapability::new()
+///     .subject("user123")
+///     .resource("resource456")
+///     .operation("read")
+///     .issue(&keypair)?;
 ///
 /// // Basic capability verification (no subject check)
 /// CapabilityVerifier::new(
@@ -56,6 +54,7 @@ pub struct CapabilityVerifier {
     operation: String,
     subject: Option<String>,
     designations: Vec<(String, String)>,
+    time_config: TokenTimeConfig,
 }
 
 impl CapabilityVerifier {
@@ -74,6 +73,7 @@ impl CapabilityVerifier {
             operation,
             subject: None,
             designations: Vec::new(),
+            time_config: TokenTimeConfig::default(),
         }
     }
 
@@ -102,6 +102,22 @@ impl CapabilityVerifier {
         self
     }
 
+    /// Asserts this verifier's anchor identity. Sugar for
+    /// `with_designation("anchor", anchor)`: proves "I am `<anchor>`" to satisfy
+    /// an anchor-bound capability (see [`crate::HessraCapability::anchor`]).
+    pub fn anchor(self, anchor: impl Into<String>) -> Self {
+        self.with_designation("anchor".to_string(), anchor.into())
+    }
+
+    /// Supply a [`TokenTimeConfig`] to control verification time. Only
+    /// `start_time` is used: when set it overrides the "now" checked against the
+    /// token's expiry (the seam for deterministic tests). Without this call the
+    /// real wall clock applies.
+    pub fn with_time(mut self, time_config: TokenTimeConfig) -> Self {
+        self.time_config = time_config;
+        self
+    }
+
     /// Performs the token verification with the configured parameters.
     ///
     /// # Returns
@@ -109,7 +125,10 @@ impl CapabilityVerifier {
     /// * `Err(TokenError)` - If verification fails for any reason
     pub fn verify(self) -> Result<(), TokenError> {
         let biscuit = Biscuit::from_base64(&self.token, self.public_key)?;
-        let now = Utc::now().timestamp();
+        let now = self
+            .time_config
+            .start_time
+            .unwrap_or_else(|| Utc::now().timestamp());
         let resource = self.resource.clone();
         let operation = self.operation.clone();
 

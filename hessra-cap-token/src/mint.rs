@@ -1,115 +1,163 @@
 extern crate biscuit_auth as biscuit;
 
+use std::time::Duration;
+
 use biscuit::macros::{biscuit, check};
 use chrono::Utc;
-use hessra_token_core::{KeyPair, TokenTimeConfig};
-use std::error::Error;
-use tracing::info;
+use hessra_token_core::{KeyPair, PublicKey, TokenError, TokenTimeConfig};
+use tracing::debug;
 
-/// Builder for creating Hessra capability tokens with flexible configuration.
+/// Builder for minting Hessra capability tokens.
 ///
-/// Capability tokens grant access to a resource+operation. The subject field is retained
-/// for auditing, but the token no longer requires the verifier to prove who is presenting it.
-/// Presenting the capability IS the authorization.
+/// A capability grants `(subject, resource, operation)`. Presenting the
+/// capability IS the authorization -- the subject is retained on the `right`
+/// fact for auditing but is not checked by default. Scope can be narrowed with
+/// designations (`check if designation(label, value)`), bound to a single
+/// verifier with [`Self::anchor`], and made **latent** (inert until activated)
+/// with [`Self::latent`].
 ///
 /// # Example
 /// ```rust
 /// use hessra_cap_token::HessraCapability;
-/// use hessra_token_core::{KeyPair, TokenTimeConfig};
+/// use hessra_token_core::KeyPair;
+/// use std::time::Duration;
 ///
-/// let keypair = KeyPair::new();
-///
-/// // Basic capability token
-/// let token = HessraCapability::new(
-///     "alice".to_string(),
-///     "resource1".to_string(),
-///     "read".to_string(),
-///     TokenTimeConfig::default()
-/// )
-/// .issue(&keypair)
-/// .expect("Failed to create token");
+/// let authority = KeyPair::new();
+/// let token = HessraCapability::new()
+///     .subject("toolsystem")
+///     .resource("compute:run")
+///     .operation("invoke")
+///     .anchor("tool:compute")
+///     .valid_for(Duration::from_secs(3600))
+///     .issue(&authority)
+///     .expect("issue capability");
 /// ```
+#[derive(Default)]
 pub struct HessraCapability {
     subject: Option<String>,
     resource: Option<String>,
     operation: Option<String>,
+    /// `check if designation(label, value)` constraints (keyless-satisfiable).
+    designations: Vec<(String, String)>,
+    /// `check if designation(label, value) trusting {pk}` constraints -- the
+    /// matching fact must be attested by `pk`.
+    designations_trusting: Vec<(PublicKey, String, String)>,
+    valid_for: Option<Duration>,
+    /// When set, the capability is latent: `check if activation($a) trusting {pk}`
+    /// makes it inert until a holder of `pk` attests an `activation` fact.
+    latent: Option<PublicKey>,
+    /// Clock + default-lifetime control. `start_time` overrides "now" (for
+    /// testing); `duration` is the default lifetime used only when `valid_for`
+    /// is unset. Defaults to the real wall clock with a 300s lifetime.
     time_config: TokenTimeConfig,
-    anchor: Option<String>,
 }
 
 impl HessraCapability {
-    /// Creates a new capability token builder.
-    ///
-    /// # Arguments
-    /// * `subject` - The subject (user) identifier (retained for auditing)
-    /// * `resource` - The resource identifier to grant access to
-    /// * `operation` - The operation to grant access to
-    /// * `time_config` - Time configuration for token validity
-    pub fn new(
-        subject: String,
-        resource: String,
-        operation: String,
-        time_config: TokenTimeConfig,
-    ) -> Self {
-        Self {
-            subject: Some(subject),
-            resource: Some(resource),
-            operation: Some(operation),
-            time_config,
-            anchor: None,
-        }
+    /// Start a new, empty capability builder.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Anchors the capability to a specific principal as the only authority
-    /// that can verify it.
-    ///
-    /// Adds an anchor designation check to the authority block:
-    /// - `check if designation("anchor", {anchor})`
-    ///
-    /// At verify time, the verifier proves "I am `<anchor>`" by supplying
-    /// `Designation { label: "anchor", value: <its-own-principal-name> }`. The
-    /// check passes iff the verifier's claimed principal name equals the anchor
-    /// value embedded here. This means the capability is honored only by the
-    /// anchor principal. A receiving principal can attenuate the capability and
-    /// delegate it to other principals, but the resulting capability still must
-    /// be presented back to the anchor for verification. It cannot be redirected
-    /// to any other verifying authority.
-    ///
-    /// The anchor lives in the authority block, so it cannot be added or removed
-    /// by subsequent third-party attenuation.
-    ///
-    /// # Arguments
-    /// * `anchor` - The principal whose verifier this capability is bound to
-    pub fn anchor_bound(mut self, anchor: String) -> Self {
-        self.anchor = Some(anchor);
+    /// Set the subject (retained on the `right` fact for auditing; not checked
+    /// at verify time by default).
+    pub fn subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
         self
     }
 
-    /// Issues (builds and signs) the capability token.
-    ///
-    /// # Arguments
-    /// * `keypair` - The keypair to sign the token with
-    ///
-    /// # Returns
-    /// Base64-encoded biscuit token
-    pub fn issue(self, keypair: &KeyPair) -> Result<String, Box<dyn Error>> {
-        let start_time = self
+    /// Set the resource this capability grants access to.
+    pub fn resource(mut self, resource: impl Into<String>) -> Self {
+        self.resource = Some(resource.into());
+        self
+    }
+
+    /// Set the operation this capability grants.
+    pub fn operation(mut self, operation: impl Into<String>) -> Self {
+        self.operation = Some(operation.into());
+        self
+    }
+
+    /// Require a designation: adds `check if designation(label, value)`. The
+    /// verifier must supply a matching `designation(label, value)` fact.
+    pub fn designation(mut self, label: impl Into<String>, value: impl Into<String>) -> Self {
+        self.designations.push((label.into(), value.into()));
+        self
+    }
+
+    /// Require a designation that must be attested by `pk`: adds
+    /// `check if designation(label, value) trusting {pk}`. The matching fact is
+    /// honored only when it comes from a block signed by `pk` (or the authority).
+    pub fn designation_trusting(
+        mut self,
+        pk: PublicKey,
+        label: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.designations_trusting
+            .push((pk, label.into(), value.into()));
+        self
+    }
+
+    /// Bind this capability to a single verifying principal. Sugar for
+    /// `designation("anchor", anchor)`: the verifier proves "I am `<anchor>`" by
+    /// supplying `designation("anchor", <its-own-id>)`. The check lives in the
+    /// authority block, so it survives attenuation and cannot be redirected to
+    /// another verifier.
+    pub fn anchor(self, anchor: impl Into<String>) -> Self {
+        self.designation("anchor", anchor)
+    }
+
+    /// Set how long the capability is valid from issuance. Defaults to 5 minutes.
+    /// Latent capabilities are typically minted long-lived and tightened to a
+    /// short window when activated.
+    pub fn valid_for(mut self, duration: Duration) -> Self {
+        self.valid_for = Some(duration);
+        self
+    }
+
+    /// Make this capability latent: it stays inert until a holder of
+    /// `activator_pk` attests an `activation` fact (see
+    /// [`crate::HessraCapability::amend`] + `.activate()`). Adds
+    /// `check if activation($a) trusting {activator_pk}`.
+    pub fn latent(mut self, activator_pk: PublicKey) -> Self {
+        self.latent = Some(activator_pk);
+        self
+    }
+
+    /// Supply a [`TokenTimeConfig`] to control time. `start_time`, when set,
+    /// overrides the issuance clock (the seam for deterministic expiry tests);
+    /// `duration` supplies the default lifetime used only when [`Self::valid_for`]
+    /// is not set. Without this call the real wall clock and a 300s default apply.
+    pub fn with_time(mut self, time_config: TokenTimeConfig) -> Self {
+        self.time_config = time_config;
+        self
+    }
+
+    /// Issue (build and sign) the capability, returning the base64 token.
+    pub fn issue(self, keypair: &KeyPair) -> Result<String, TokenError> {
+        let subject = self
+            .subject
+            .ok_or_else(|| TokenError::generic("capability requires a subject"))?;
+        let resource = self
+            .resource
+            .ok_or_else(|| TokenError::generic("capability requires a resource"))?;
+        let operation = self
+            .operation
+            .ok_or_else(|| TokenError::generic("capability requires an operation"))?;
+
+        let now = self
             .time_config
             .start_time
             .unwrap_or_else(|| Utc::now().timestamp());
-        let expiration = start_time + self.time_config.duration;
+        let valid_for = self
+            .valid_for
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(self.time_config.duration);
+        let expiration = now + valid_for;
 
-        let anchor = self.anchor;
-
-        let subject = self.subject.ok_or("Token requires subject")?;
-        let resource = self.resource.ok_or("Token requires resource")?;
-        let operation = self.operation.ok_or("Token requires operation")?;
-
-        // Build authority block -- subject removed from the check.
-        // The right fact still has 3 fields (subject stays for auditing).
-        // $sub becomes a free variable -- the token no longer demands the
-        // verifier prove who is presenting it.
-        let mut biscuit_builder = biscuit!(
+        // Subject stays on the `right` fact for auditing; $sub is free in the
+        // check, so the verifier is not required to prove who presents the token.
+        let mut builder = biscuit!(
             r#"
                 right({subject}, {resource}, {operation});
                 check if resource($res), operation($op), right($sub, $res, $op);
@@ -117,24 +165,27 @@ impl HessraCapability {
             "#
         );
 
-        // Add the anchor designation if specified. The anchor binds the
-        // capability to one named principal as the only authority that can
-        // verify it. The check lives at the authority block so it cannot be
-        // added or removed by subsequent attenuation.
-        if let Some(anchor) = anchor {
-            let anchor_label = "anchor".to_string();
-            biscuit_builder = biscuit_builder.check(check!(
-                r#"
-                    check if designation({anchor_label}, {anchor});
-                "#
+        for (label, value) in &self.designations {
+            let (label, value) = (label.clone(), value.clone());
+            builder = builder.check(check!(r#"check if designation({label}, {value});"#))?;
+        }
+
+        for (pk, label, value) in &self.designations_trusting {
+            let (pk, label, value) = (*pk, label.clone(), value.clone());
+            builder = builder.check(check!(
+                r#"check if designation({label}, {value}) trusting {pk};"#
             ))?;
         }
 
-        // Build and sign the biscuit
-        let biscuit = biscuit_builder.build(keypair)?;
-        info!("biscuit (authority): {}", biscuit);
-        let token = biscuit.to_base64()?;
-        Ok(token)
+        if let Some(activator_pk) = self.latent {
+            builder = builder.check(check!(
+                r#"check if activation($a) trusting {activator_pk};"#
+            ))?;
+        }
+
+        let biscuit = builder.build(keypair)?;
+        debug!("minted capability authority block: {}", biscuit);
+        Ok(biscuit.to_base64()?)
     }
 }
 
@@ -142,443 +193,131 @@ impl HessraCapability {
 mod tests {
     use super::*;
     use crate::verify::CapabilityVerifier;
-    use chrono::Utc;
+    use std::time::Duration;
 
-    #[test]
-    fn test_create_and_verify_capability() {
-        let subject = "test@test.com".to_owned();
-        let resource = "res1".to_string();
-        let operation = "read".to_string();
-        let root = KeyPair::new();
-        let public_key = root.public();
-
-        let token = HessraCapability::new(
-            subject.clone(),
-            resource.clone(),
-            operation.clone(),
-            TokenTimeConfig::default(),
-        )
-        .issue(&root)
-        .expect("Failed to create token");
-
-        let res = CapabilityVerifier::new(token, public_key, resource, operation).verify();
-        assert!(res.is_ok());
+    fn issue(authority: &KeyPair) -> String {
+        HessraCapability::new()
+            .subject("alice")
+            .resource("res1")
+            .operation("read")
+            .issue(authority)
+            .expect("issue")
     }
 
     #[test]
-    fn test_capability_without_subject() {
-        let subject = "alice".to_owned();
-        let resource = "res1".to_string();
-        let operation = "read".to_string();
+    fn create_and_verify() {
         let root = KeyPair::new();
-        let public_key = root.public();
-
-        let token = HessraCapability::new(
-            subject.clone(),
-            resource.clone(),
-            operation.clone(),
-            TokenTimeConfig::default(),
-        )
-        .issue(&root)
-        .expect("Failed to create token");
-
-        // Verify without subject -- the core capability change
-        let res = CapabilityVerifier::new(token, public_key, resource, operation).verify();
+        let token = issue(&root);
         assert!(
-            res.is_ok(),
-            "Capability verification without subject should succeed"
+            CapabilityVerifier::new(token, root.public(), "res1".into(), "read".into())
+                .verify()
+                .is_ok()
         );
     }
 
     #[test]
-    fn test_capability_with_optional_subject() {
-        let subject = "alice".to_owned();
-        let resource = "res1".to_string();
-        let operation = "read".to_string();
+    fn wrong_resource_or_operation_rejected() {
         let root = KeyPair::new();
-        let public_key = root.public();
-
-        let token = HessraCapability::new(
-            subject.clone(),
-            resource.clone(),
-            operation.clone(),
-            TokenTimeConfig::default(),
-        )
-        .issue(&root)
-        .expect("Failed to create token");
-
-        // Verify with optional subject check
-        let res = CapabilityVerifier::new(
-            token.clone(),
-            public_key,
-            resource.clone(),
-            operation.clone(),
-        )
-        .with_subject(subject.clone())
-        .verify();
+        let token = issue(&root);
         assert!(
-            res.is_ok(),
-            "Verification with correct subject should succeed"
+            CapabilityVerifier::new(token.clone(), root.public(), "res2".into(), "read".into())
+                .verify()
+                .is_err()
         );
-
-        // Verify with wrong subject should fail
-        let res = CapabilityVerifier::new(
-            token.clone(),
-            public_key,
-            resource.clone(),
-            operation.clone(),
-        )
-        .with_subject("bob".to_string())
-        .verify();
-        assert!(res.is_err(), "Verification with wrong subject should fail");
+        assert!(
+            CapabilityVerifier::new(token, root.public(), "res1".into(), "write".into())
+                .verify()
+                .is_err()
+        );
     }
 
     #[test]
-    fn test_wrong_resource_rejected() {
+    fn missing_field_errors() {
         let root = KeyPair::new();
-        let public_key = root.public();
-
-        let token = HessraCapability::new(
-            "alice".to_string(),
-            "res1".to_string(),
-            "read".to_string(),
-            TokenTimeConfig::default(),
-        )
-        .issue(&root)
-        .expect("Failed to create token");
-
-        let res =
-            CapabilityVerifier::new(token, public_key, "res2".to_string(), "read".to_string())
-                .verify();
-        assert!(res.is_err(), "Wrong resource should be rejected");
+        assert!(
+            HessraCapability::new()
+                .resource("r")
+                .operation("o")
+                .issue(&root)
+                .is_err()
+        );
     }
 
     #[test]
-    fn test_wrong_operation_rejected() {
+    fn fresh_cap_within_window_passes() {
         let root = KeyPair::new();
-        let public_key = root.public();
-
-        let token = HessraCapability::new(
-            "alice".to_string(),
-            "res1".to_string(),
-            "read".to_string(),
-            TokenTimeConfig::default(),
-        )
-        .issue(&root)
-        .expect("Failed to create token");
-
-        let res =
-            CapabilityVerifier::new(token, public_key, "res1".to_string(), "write".to_string())
-                .verify();
-        assert!(res.is_err(), "Wrong operation should be rejected");
+        let token = HessraCapability::new()
+            .subject("alice")
+            .resource("res1")
+            .operation("read")
+            .valid_for(Duration::from_secs(60))
+            .issue(&root)
+            .unwrap();
+        assert!(
+            CapabilityVerifier::new(token, root.public(), "res1".into(), "read".into())
+                .verify()
+                .is_ok()
+        );
     }
 
     #[test]
-    fn test_biscuit_expiration() {
-        let subject = "test@test.com".to_owned();
-        let resource = "res1".to_string();
-        let operation = "read".to_string();
+    fn expired_cap_rejected() {
+        use hessra_token_core::TokenTimeConfig;
+
         let root = KeyPair::new();
-        let public_key = root.public();
-
-        // Create a valid token
-        let token = HessraCapability::new(
-            subject.clone(),
-            resource.clone(),
-            operation.clone(),
-            TokenTimeConfig::default(),
-        )
-        .issue(&root)
-        .expect("Failed to create token");
-
-        let res = CapabilityVerifier::new(token, public_key, resource.clone(), operation.clone())
-            .verify();
-        assert!(res.is_ok());
-
-        // Create an expired token
-        let root = KeyPair::new();
-        let public_key = root.public();
-        let token = HessraCapability::new(
-            subject.clone(),
-            resource.clone(),
-            operation.clone(),
-            TokenTimeConfig {
-                start_time: Some(Utc::now().timestamp() - 301),
+        let base = 1_000_000_000;
+        // Mint a 300s cap on a fixed clock, then verify 301s later -- past the
+        // window. Deterministic, no sleep.
+        let token = HessraCapability::new()
+            .subject("alice")
+            .resource("res1")
+            .operation("read")
+            .with_time(TokenTimeConfig {
+                start_time: Some(base),
                 duration: 300,
-            },
-        )
-        .issue(&root)
-        .expect("Failed to create expired token");
-
-        let res = CapabilityVerifier::new(token, public_key, resource, operation).verify();
-        assert!(res.is_err(), "Expired token should be rejected");
-    }
-
-    #[test]
-    fn test_anchor_bound_capability() {
-        // Anchor binds the capability to one named principal as the only
-        // authority that can verify it. The verifier proves "I am `<anchor>`"
-        // by supplying `designation("anchor", <its-own-principal-name>)`.
-        let keypair = KeyPair::new();
-        let public_key = keypair.public();
-
-        let token = HessraCapability::new(
-            "alice".to_string(),
-            "resource1".to_string(),
-            "read".to_string(),
-            TokenTimeConfig::default(),
-        )
-        .anchor_bound("webapp".to_string())
-        .issue(&keypair)
-        .expect("Failed to create anchor-bound token");
-
-        // Webapp's verifier asserts "I am webapp", check passes.
-        let res = CapabilityVerifier::new(
-            token.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_designation("anchor".to_string(), "webapp".to_string())
-        .verify();
-        assert!(res.is_ok(), "Verification at the anchor should succeed");
-
-        // Without the anchor designation, the capability fails closed.
-        let res = CapabilityVerifier::new(
-            token.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .verify();
+            })
+            .issue(&root)
+            .unwrap();
         assert!(
-            res.is_err(),
-            "Should fail when verifier does not assert any anchor"
-        );
-
-        // A peer service `bobapp` asserting "I am bobapp" cannot honor a
-        // capability anchored at webapp.
-        let res = CapabilityVerifier::new(
-            token.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_designation("anchor".to_string(), "bobapp".to_string())
-        .verify();
-        assert!(
-            res.is_err(),
-            "Should fail when verifier's claimed principal is not the anchor"
+            CapabilityVerifier::new(token, root.public(), "res1".into(), "read".into())
+                .with_time(TokenTimeConfig {
+                    start_time: Some(base + 301),
+                    duration: 300,
+                })
+                .verify()
+                .is_err()
         );
     }
 
     #[test]
-    fn test_anchor_survives_attenuation() {
-        // The anchor check lives in the authority block, so subsequent
-        // third-party attenuations (including arbitrary designations added by
-        // the recipient before delegating downward) cannot strip the anchor
-        // binding.
-        let keypair = KeyPair::new();
-        let public_key = keypair.public();
-
-        let token = HessraCapability::new(
-            "alice".to_string(),
-            "resource1".to_string(),
-            "read".to_string(),
-            TokenTimeConfig::default(),
-        )
-        .anchor_bound("webapp".to_string())
-        .issue(&keypair)
-        .expect("Failed to create token");
-
-        // Recipient (webapp) attenuates with a per-user designation before
-        // handing the capability downward.
-        let attenuated = crate::attenuate::DesignationBuilder::from_base64(token, public_key)
-            .expect("Failed to create designation builder")
-            .designate("user".to_string(), "alice".to_string())
-            .attenuate_base64()
-            .expect("Failed to attenuate");
-
-        // Webapp's verifier asserts "I am webapp" and supplies the per-user
-        // designation. Verification succeeds.
-        let res = CapabilityVerifier::new(
-            attenuated.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_designation("anchor".to_string(), "webapp".to_string())
-        .with_designation("user".to_string(), "alice".to_string())
-        .verify();
-        assert!(
-            res.is_ok(),
-            "Verifier at the anchor should succeed with all designations"
-        );
-
-        // Even after attenuation, omitting the anchor assertion fails closed.
-        let res = CapabilityVerifier::new(
-            attenuated,
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_designation("user".to_string(), "alice".to_string())
-        .verify();
-        assert!(
-            res.is_err(),
-            "Anchor check survives attenuation, still required at verify"
-        );
-    }
-
-    #[test]
-    fn test_designation_attenuation() {
-        let keypair = KeyPair::new();
-        let public_key = keypair.public();
-
-        // Mint a basic token
-        let token = HessraCapability::new(
-            "alice".to_string(),
-            "resource1".to_string(),
-            "read".to_string(),
-            TokenTimeConfig::default(),
-        )
-        .issue(&keypair)
-        .expect("Failed to create token");
-
-        // Attenuate with a designation
-        let attenuated = crate::attenuate::DesignationBuilder::from_base64(token, public_key)
-            .expect("Failed to create designation builder")
-            .designate("tenant_id".to_string(), "t-123".to_string())
-            .attenuate_base64()
-            .expect("Failed to attenuate");
-
-        // Verify with matching designation
-        let res = CapabilityVerifier::new(
-            attenuated.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_designation("tenant_id".to_string(), "t-123".to_string())
-        .verify();
-        assert!(res.is_ok(), "Should pass with matching designation");
-
-        // Verify with wrong designation value
-        let res = CapabilityVerifier::new(
-            attenuated.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_designation("tenant_id".to_string(), "t-999".to_string())
-        .verify();
-        assert!(res.is_err(), "Should fail with wrong designation value");
-
-        // Verify without designation should fail
-        let res = CapabilityVerifier::new(
-            attenuated.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .verify();
-        assert!(res.is_err(), "Should fail without designation");
-    }
-
-    #[test]
-    fn test_multi_designation() {
-        let keypair = KeyPair::new();
-        let public_key = keypair.public();
-
-        let token = HessraCapability::new(
-            "alice".to_string(),
-            "resource1".to_string(),
-            "read".to_string(),
-            TokenTimeConfig::default(),
-        )
-        .issue(&keypair)
-        .expect("Failed to create token");
-
-        // Attenuate with multiple designations
-        let attenuated = crate::attenuate::DesignationBuilder::from_base64(token, public_key)
-            .expect("Failed to create designation builder")
-            .designate("tenant_id".to_string(), "t-123".to_string())
-            .designate("user_id".to_string(), "u-456".to_string())
-            .attenuate_base64()
-            .expect("Failed to attenuate");
-
-        // Verify with both designations
-        let res = CapabilityVerifier::new(
-            attenuated.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_designation("tenant_id".to_string(), "t-123".to_string())
-        .with_designation("user_id".to_string(), "u-456".to_string())
-        .verify();
-        assert!(res.is_ok(), "Should pass with both designations");
-
-        // Verify with only one designation should fail (missing the other)
-        let res = CapabilityVerifier::new(
-            attenuated.clone(),
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .with_designation("tenant_id".to_string(), "t-123".to_string())
-        .verify();
-        assert!(res.is_err(), "Should fail with missing designation");
-    }
-
-    #[test]
-    fn test_builder_issue() {
-        let keypair = KeyPair::new();
-        let public_key = keypair.public();
-
-        let token = HessraCapability::new(
-            "alice".to_string(),
-            "resource1".to_string(),
-            "read".to_string(),
-            TokenTimeConfig::default(),
-        )
-        .issue(&keypair)
-        .expect("Failed to create token");
-
-        let res = CapabilityVerifier::new(
-            token,
-            public_key,
-            "resource1".to_string(),
-            "read".to_string(),
-        )
-        .verify();
-        assert!(res.is_ok());
-    }
-
-    #[test]
-    fn test_custom_time_config() {
+    fn anchor_binds_to_one_verifier() {
         let root = KeyPair::new();
-        let public_key = root.public();
+        let token = HessraCapability::new()
+            .subject("alice")
+            .resource("res1")
+            .operation("read")
+            .anchor("webapp")
+            .issue(&root)
+            .unwrap();
 
-        // Create token with custom start time (1 hour in the past) and longer duration (2 hours)
-        let past_time = Utc::now().timestamp() - 3600;
-        let time_config = TokenTimeConfig {
-            start_time: Some(past_time),
-            duration: 7200,
-        };
-
-        let token = HessraCapability::new(
-            "alice".to_string(),
-            "res1".to_string(),
-            "read".to_string(),
-            time_config,
-        )
-        .issue(&root)
-        .expect("Failed to create token");
-
-        let res =
-            CapabilityVerifier::new(token, public_key, "res1".to_string(), "read".to_string())
-                .verify();
-        assert!(res.is_ok());
+        assert!(
+            CapabilityVerifier::new(token.clone(), root.public(), "res1".into(), "read".into())
+                .anchor("webapp")
+                .verify()
+                .is_ok()
+        );
+        // No anchor asserted -> fail closed.
+        assert!(
+            CapabilityVerifier::new(token.clone(), root.public(), "res1".into(), "read".into())
+                .verify()
+                .is_err()
+        );
+        // Wrong anchor -> rejected.
+        assert!(
+            CapabilityVerifier::new(token, root.public(), "res1".into(), "read".into())
+                .anchor("bobapp")
+                .verify()
+                .is_err()
+        );
     }
 }

@@ -188,7 +188,7 @@ impl WasmCapabilityVerifier {
 /// ```
 #[wasm_bindgen(js_name = "DesignationBuilder")]
 pub struct WasmDesignationBuilder {
-    inner: Option<hessra_cap_token::DesignationBuilder>,
+    inner: Option<hessra_cap_token::CapabilityAmendment>,
 }
 
 #[wasm_bindgen(js_class = "DesignationBuilder")]
@@ -197,8 +197,7 @@ impl WasmDesignationBuilder {
     #[wasm_bindgen]
     pub fn from_base64(token: &str, public_key: &str) -> Result<WasmDesignationBuilder, JsError> {
         let pk = parse_key(public_key)?;
-        let builder = hessra_cap_token::DesignationBuilder::from_base64(token.to_string(), pk)
-            .map_err(to_js_error)?;
+        let builder = hessra_cap_token::HessraCapability::amend(token, pk).map_err(to_js_error)?;
         Ok(Self {
             inner: Some(builder),
         })
@@ -216,7 +215,7 @@ impl WasmDesignationBuilder {
             .take()
             .ok_or_else(|| JsError::new("DesignationBuilder already consumed"))?;
         Ok(Self {
-            inner: Some(builder.designate(label.to_string(), value.to_string())),
+            inner: Some(builder.designation(label, value)),
         })
     }
 
@@ -228,7 +227,7 @@ impl WasmDesignationBuilder {
             .inner
             .take()
             .ok_or_else(|| JsError::new("DesignationBuilder already consumed"))?;
-        builder.attenuate_base64().map_err(to_js_error)
+        builder.attenuate().map_err(to_js_error)
     }
 }
 
