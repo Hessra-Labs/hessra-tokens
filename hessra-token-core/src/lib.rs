@@ -30,4 +30,4 @@ pub use time::TokenTimeConfig;
 pub use utils::{decode_token, encode_token, parse_token, public_key_from_pem_file};
 
 // Re-export biscuit types that are needed for public API
-pub use biscuit_auth::{Biscuit, KeyPair, PublicKey};
+pub use biscuit_auth::{Biscuit, KeyPair, PrivateKey, PublicKey};

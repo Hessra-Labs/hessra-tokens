@@ -159,7 +159,16 @@ impl CapabilityVerifier {
             authz = authz.fact(fact!(r#"designation({label}, {value});"#))?;
         }
 
-        match authz.build(&biscuit)?.authorize() {
+        // Biscuit's default datalog budget (1ms) is calibrated for native
+        // speed; under WebAssembly the same evaluation regularly exceeds it
+        // and verification fails spuriously. The capability chains verified
+        // here are small and self-authored, so a generous fixed budget keeps
+        // the DoS bound while working on every target.
+        let limits = biscuit::datalog::RunLimits {
+            max_time: std::time::Duration::from_millis(50),
+            ..Default::default()
+        };
+        match authz.build(&biscuit)?.authorize_with_limits(limits) {
             Ok(_) => Ok(()),
             Err(e) => Err(convert_capability_error(
                 e,
