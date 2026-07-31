@@ -9,7 +9,7 @@ use tracing::debug;
 
 /// Builder for minting Hessra capability tokens.
 ///
-/// A capability grants `(subject, resource, operation)`. Presenting the
+/// A capability authorizes `(subject, resource, operation)`. Presenting the
 /// capability IS the authorization -- the subject is retained on the `right`
 /// fact for auditing but is not checked by default. Scope can be narrowed with
 /// designations (`check if designation(label, value)`), bound to a single
@@ -65,13 +65,13 @@ impl HessraCapability {
         self
     }
 
-    /// Set the resource this capability grants access to.
+    /// Set the resource this capability authorizes access to.
     pub fn resource(mut self, resource: impl Into<String>) -> Self {
         self.resource = Some(resource.into());
         self
     }
 
-    /// Set the operation this capability grants.
+    /// Set the operation this capability authorizes.
     pub fn operation(mut self, operation: impl Into<String>) -> Self {
         self.operation = Some(operation.into());
         self

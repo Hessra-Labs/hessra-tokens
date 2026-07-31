@@ -63,7 +63,7 @@ impl ContextVerifier {
     /// Add an exposure label that must NOT be present in the token.
     ///
     /// Chainable. Each call asserts one candidate `exposure({label})` fact; if
-    /// the token rejects any of them, the grant is blocked (OR semantics across
+    /// the token rejects any of them, the handout is blocked (OR semantics across
     /// all excluded labels).
     pub fn excludes(mut self, label: impl Into<String>) -> Self {
         self.excludes.push(label.into());

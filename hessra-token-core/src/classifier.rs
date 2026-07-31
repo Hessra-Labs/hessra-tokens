@@ -15,7 +15,7 @@ use std::fmt;
 pub enum TokenType {
     /// Identity token - represents an identity/principal
     Identity,
-    /// Capability token - grants access to a resource
+    /// Capability token - authorizes access to a resource
     Capability,
 }
 
