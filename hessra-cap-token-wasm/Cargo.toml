@@ -13,8 +13,8 @@ categories = ["wasm", "authentication"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-hessra-cap-token = { path = "../hessra-cap-token", version = "1.0.0" }
-hessra-token-core = { path = "../hessra-token-core", version = "1.0.0" }
+hessra-cap-token = { path = "../hessra-cap-token", version = "2.0" }
+hessra-token-core = { path = "../hessra-token-core", version = "2.0" }
 biscuit-auth = { workspace = true, features = ["wasm"] }
 wasm-bindgen = "0.2"
 serde = { workspace = true }
