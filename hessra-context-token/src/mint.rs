@@ -31,8 +31,7 @@ pub struct HessraContext {
     subject: String,
     time_config: TokenTimeConfig,
     initial_exposures: Vec<String>,
-    initial_source: Option<String>,
-    compound_rejects: Vec<(String, String)>,
+    initial_sources: Vec<String>,
 }
 
 impl HessraContext {
@@ -46,55 +45,46 @@ impl HessraContext {
             subject,
             time_config,
             initial_exposures: Vec::new(),
-            initial_source: None,
-            compound_rejects: Vec::new(),
+            initial_sources: Vec::new(),
         }
-    }
-
-    /// Seed a two-label compound reject rule into the authority block.
-    ///
-    /// Adds a `reject if exposure({first}), exposure({second})` rule, which
-    /// fires only when a verifier asserts BOTH `exposure({first})` and
-    /// `exposure({second})` facts in the same authorization pass. This gives
-    /// the conjunction (`AND`) semantics that single-label
-    /// `reject if exposure({label})` rules cannot express: neither label alone
-    /// blocks, but the two together do.
-    ///
-    /// Compound rejects are policy structure (the set of label pairs that
-    /// preclude issuance), not exposure attestation, so they carry no
-    /// `exposed_label` fact and are not reported by
-    /// [`crate::exposure::extract_exposure_labels`]. Seed them at mint from the
-    /// authority's policy. Duplicate pairs (in either order) are ignored.
-    pub fn with_compound_reject(
-        mut self,
-        first: impl Into<String>,
-        second: impl Into<String>,
-    ) -> Self {
-        let pair = (first.into(), second.into());
-        let dup = self
-            .compound_rejects
-            .iter()
-            .any(|(a, b)| (*a == pair.0 && *b == pair.1) || (*a == pair.1 && *b == pair.0));
-        if !dup {
-            self.compound_rejects.push(pair);
-        }
-        self
     }
 
     /// Stack initial exposure labels into the authority block.
     ///
     /// All labels in `labels` land in the same authority block alongside the
-    /// `context(subject)` fact, paired with one `exposure_source` and one
-    /// `exposure_time`. Multiple calls accumulate labels; the most recent
-    /// source replaces any earlier one (initial exposures share a single
-    /// source by design).
+    /// `context(subject)` fact, paired with one `exposure_time`. Multiple calls
+    /// accumulate both labels and sources: every distinct `source` is recorded
+    /// as its own `exposure_source` fact.
+    ///
+    /// Accumulating rather than replacing is what lets a compaction
+    /// ([`crate::compact_context`]) fold many third-party blocks into one
+    /// authority block without collapsing provenance -- a caller that
+    /// intersects the recorded sources against the objects capable of
+    /// conferring a label would otherwise lose its answer at every re-mint.
     pub fn with_initial_exposures(mut self, labels: &[String], source: impl Into<String>) -> Self {
         for label in labels {
             if !self.initial_exposures.contains(label) {
                 self.initial_exposures.push(label.clone());
             }
         }
-        self.initial_source = Some(source.into());
+        let source = source.into();
+        if !self.initial_sources.contains(&source) {
+            self.initial_sources.push(source);
+        }
+        self
+    }
+
+    /// Record additional `exposure_source` facts without adding labels.
+    ///
+    /// Compaction needs this: the sources it is carrying forward came from
+    /// blocks it is discarding, and they do not line up one-to-one with the
+    /// labels being restacked.
+    pub fn with_exposure_sources(mut self, sources: &[String]) -> Self {
+        for source in sources {
+            if !self.initial_sources.contains(source) {
+                self.initial_sources.push(source.clone());
+            }
+        }
         self
     }
 
@@ -122,7 +112,11 @@ impl HessraContext {
             "#
         );
 
-        if !self.initial_exposures.is_empty() {
+        // Sources are emitted on their own condition, not nested under labels:
+        // a compaction can carry provenance for labels it restacks, and a
+        // caller that supplied only sources should not have them silently
+        // dropped.
+        if !self.initial_exposures.is_empty() || !self.initial_sources.is_empty() {
             let now = Utc::now().timestamp();
             for label in &self.initial_exposures {
                 let label = label.clone();
@@ -134,19 +128,11 @@ impl HessraContext {
                     "#
                 );
             }
-            if let Some(source) = self.initial_source {
+            for source in &self.initial_sources {
+                let source = source.clone();
                 builder = biscuit_merge!(builder, r#"exposure_source({source});"#);
             }
             builder = biscuit_merge!(builder, r#"exposure_time({now});"#);
-        }
-
-        for (first, second) in &self.compound_rejects {
-            let first = first.clone();
-            let second = second.clone();
-            builder = biscuit_merge!(
-                builder,
-                r#"reject if exposure({first}), exposure({second});"#
-            );
         }
 
         let biscuit = builder.build(keypair)?;
@@ -218,61 +204,41 @@ mod tests {
     }
 
     #[test]
-    fn test_compound_reject_requires_both_labels() {
+    fn test_synthesized_compound_behaves_as_a_plain_label() {
+        // A conjunction is conferred as one derived label, so it blocks on a
+        // single asserted fact -- the two-label reject rule is gone, and with it
+        // the need for the verifier to assert both members together.
         let keypair = KeyPair::new();
         let public_key = keypair.public();
 
+        let compound = crate::compound_label(&["credentials:local", "untrusted_input"])
+            .expect("Failed to build compound label");
         let token = HessraContext::new("agent:test".to_string(), TokenTimeConfig::default())
-            .with_compound_reject("credentials:local", "untrusted_input")
-            .issue(&keypair)
-            .expect("Failed to create context token with compound reject");
-
-        // Neither label alone fires the compound reject.
-        ContextVerifier::new(token.clone(), public_key)
-            .excludes("credentials:local")
-            .verify()
-            .expect("compound reject must not fire on a single label");
-        ContextVerifier::new(token.clone(), public_key)
-            .excludes("untrusted_input")
-            .verify()
-            .expect("compound reject must not fire on a single label");
-
-        // Both labels together fire the compound reject.
-        let result = ContextVerifier::new(token, public_key)
-            .excludes("credentials:local")
-            .excludes("untrusted_input")
-            .verify();
-        assert!(
-            result.is_err(),
-            "compound reject must fire when both labels are asserted"
-        );
-    }
-
-    #[test]
-    fn test_compound_reject_deduplicates_pairs() {
-        let keypair = KeyPair::new();
-        let public_key = keypair.public();
-
-        // The same pair in either order should collapse to one rule.
-        let token = HessraContext::new("agent:test".to_string(), TokenTimeConfig::default())
-            .with_compound_reject("a", "b")
-            .with_compound_reject("b", "a")
+            .with_initial_exposures(std::slice::from_ref(&compound), "policy")
             .issue(&keypair)
             .expect("Failed to create context token");
 
-        let biscuit =
-            biscuit::Biscuit::from_base64(&token, public_key).expect("Failed to parse token");
-        assert_eq!(
-            biscuit.block_count(),
-            1,
-            "compound rejects must stack into the authority block"
-        );
+        // Neither member alone blocks: only the synthesized label was conferred.
+        ContextVerifier::new(token.clone(), public_key)
+            .excludes("credentials:local")
+            .verify()
+            .expect("a member of an unconferred conjunction must not block");
+        ContextVerifier::new(token.clone(), public_key)
+            .excludes("untrusted_input")
+            .verify()
+            .expect("a member of an unconferred conjunction must not block");
 
-        let result = ContextVerifier::new(token, public_key)
-            .excludes("a")
-            .excludes("b")
+        // The compound itself blocks, asserted on its own.
+        let result = ContextVerifier::new(token.clone(), public_key)
+            .excludes(compound.clone())
             .verify();
-        assert!(result.is_err(), "compound reject must still fire");
+        assert!(result.is_err(), "the synthesized compound must block");
+
+        // And unlike a compound reject rule, it is enumerable -- which is what
+        // lets a re-mint carry it forward.
+        let labels = crate::extract_exposure_labels(&token, public_key)
+            .expect("Failed to extract exposure labels");
+        assert_eq!(labels, vec![compound]);
     }
 
     #[test]

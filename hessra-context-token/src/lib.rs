@@ -19,6 +19,12 @@
 //! - **Enumerable**: Each label is also recorded as an `exposed_label({label})` metadata
 //!   fact (a separate predicate the reject rules never test), queried with
 //!   `trusting authority, {pubkey}` so only issuer-attested labels are reported.
+//! - **Conjunctions are labels**: "blocked only when both `a` and `b` are present"
+//!   is expressed by conferring one synthesized label (the canonical join of the
+//!   members, see [`compound_label`]) at the moment the writer observes both --
+//!   not by a two-label reject rule. A compound is an ordinary label from every
+//!   other angle: same reject rule, same `exposed_label` fact, enumerable, and
+//!   therefore preserved by a re-mint.
 //! - **Block-stacked**: All labels added in a single call land in the same block.
 //! - **Inheritable**: Child contexts inherit parent exposure via `fork_context`.
 //!
@@ -83,11 +89,13 @@
 
 mod exposure;
 mod inspect;
+mod label;
 mod mint;
 mod verify;
 
-pub use exposure::{add_compound_reject, add_exposure, extract_exposure_labels, fork_context};
+pub use exposure::{add_exposure, compact_context, extract_exposure_labels, fork_context};
 pub use inspect::{ContextInspectResult, inspect_context_token};
+pub use label::{COMPOUND_DELIMITER, compound_label, compound_members, validate_plain_label};
 pub use mint::HessraContext;
 pub use verify::ContextVerifier;
 
