@@ -448,7 +448,7 @@ dependencies = [
 
 [[package]]
 name = "hessra-context-token"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "biscuit-auth",
  "chrono",
