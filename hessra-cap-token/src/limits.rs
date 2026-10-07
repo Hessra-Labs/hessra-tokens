@@ -3,13 +3,13 @@ extern crate biscuit_auth as biscuit;
 use biscuit::datalog::RunLimits;
 use std::time::Duration;
 
-/// Datalog execution budget for context token verification and inspection.
+/// Datalog execution budget for capability token verification.
 ///
 /// Biscuit's default budget (1ms) is calibrated for native speed on an idle
 /// machine; under WebAssembly or on a loaded CI runner the same evaluation
-/// regularly exceeds it and verification fails spuriously. Context tokens
-/// are small and self-authored, so a generous fixed budget keeps the DoS
-/// bound while working on every target.
+/// regularly exceeds it and verification fails spuriously. Capability
+/// chains are small and self-authored, so a generous fixed budget keeps the
+/// DoS bound while working on every target.
 ///
 /// Set this on the `AuthorizerBuilder` (`set_limits`) before `build`. The
 /// per-call `authorize_with_limits` / `query_with_limits` variants only

@@ -96,9 +96,10 @@ impl ContextVerifier {
         }
 
         authz
+            .set_limits(crate::limits::datalog_limits())
             .build(&biscuit)
             .map_err(|e| TokenError::internal(format!("failed to build authorizer: {e}")))?
-            .authorize_with_limits(crate::limits::datalog_limits())
+            .authorize()
             .map_err(TokenError::from)?;
 
         Ok(())

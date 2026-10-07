@@ -1,6 +1,6 @@
 [package]
 name = "hessra-context-token"
-version = "3.0.1"
+version = "3.0.2"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Jake Valentic <jake@hessra.net>"]

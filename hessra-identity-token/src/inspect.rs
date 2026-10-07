@@ -33,14 +33,12 @@ pub fn inspect_identity_token(
     );
 
     let mut authorizer = authorizer
+        .set_limits(crate::limits::datalog_limits())
         .build(&biscuit)
         .map_err(|e| TokenError::internal(format!("Failed to build authorizer: {e}")))?;
 
     let subjects: Vec<(String,)> = authorizer
-        .query_with_limits(
-            "data($name) <- subject($name)",
-            crate::limits::datalog_limits(),
-        )
+        .query("data($name) <- subject($name)")
         .map_err(|e| TokenError::internal(format!("Failed to query subject: {e}")))?;
 
     let base_identity = subjects

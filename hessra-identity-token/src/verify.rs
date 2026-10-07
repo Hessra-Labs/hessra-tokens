@@ -56,10 +56,11 @@ impl IdentityVerifier {
         ))?;
 
         let mut authz = authz
+            .set_limits(crate::limits::datalog_limits())
             .build(&biscuit)
             .map_err(|e| TokenError::internal(format!("Failed to build authorizer: {e}")))?;
 
-        match authz.authorize_with_limits(crate::limits::datalog_limits()) {
+        match authz.authorize() {
             Ok(_) => Ok(()),
             Err(e) => Err(convert_identity_verification_error(e, expected_identity)),
         }

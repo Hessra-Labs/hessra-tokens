@@ -33,6 +33,7 @@
 //! ```
 
 pub(crate) mod attenuate;
+mod limits;
 pub(crate) mod mint;
 mod revocation;
 pub(crate) mod verify;

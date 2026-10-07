@@ -101,6 +101,7 @@ pub fn extract_exposure_labels(
     );
 
     let mut authorizer = authz
+        .set_limits(crate::limits::datalog_limits())
         .build(&biscuit)
         .map_err(|e| TokenError::internal(format!("failed to build authorizer: {e}")))?;
 
