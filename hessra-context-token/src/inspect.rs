@@ -49,7 +49,10 @@ pub fn inspect_context_token(
         .map_err(|e| TokenError::internal(format!("failed to build authorizer: {e}")))?;
 
     let subjects: Vec<(String,)> = authorizer
-        .query("data($name) <- context($name)")
+        .query_with_limits(
+            "data($name) <- context($name)",
+            crate::limits::datalog_limits(),
+        )
         .map_err(|e| TokenError::internal(format!("failed to query context subject: {e}")))?;
     let subject = subjects.first().map(|(s,)| s.clone()).unwrap_or_default();
 

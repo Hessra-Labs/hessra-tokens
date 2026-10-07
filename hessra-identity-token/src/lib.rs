@@ -1,6 +1,7 @@
 mod attenuate;
 mod inspect;
 mod jit;
+mod limits;
 mod mint;
 mod revocation;
 mod verify;

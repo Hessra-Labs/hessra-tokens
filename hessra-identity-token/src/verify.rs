@@ -59,7 +59,7 @@ impl IdentityVerifier {
             .build(&biscuit)
             .map_err(|e| TokenError::internal(format!("Failed to build authorizer: {e}")))?;
 
-        match authz.authorize() {
+        match authz.authorize_with_limits(crate::limits::datalog_limits()) {
             Ok(_) => Ok(()),
             Err(e) => Err(convert_identity_verification_error(e, expected_identity)),
         }

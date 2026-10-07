@@ -37,7 +37,10 @@ pub fn inspect_identity_token(
         .map_err(|e| TokenError::internal(format!("Failed to build authorizer: {e}")))?;
 
     let subjects: Vec<(String,)> = authorizer
-        .query("data($name) <- subject($name)")
+        .query_with_limits(
+            "data($name) <- subject($name)",
+            crate::limits::datalog_limits(),
+        )
         .map_err(|e| TokenError::internal(format!("Failed to query subject: {e}")))?;
 
     let base_identity = subjects
